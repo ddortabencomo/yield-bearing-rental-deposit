@@ -36,7 +36,7 @@ export const symbolOf = (token: string) =>
 export const DECIMALS = 7
 /** RentalDeposit wasm already uploaded to testnet: new agreements are instances of it. */
 export const WASM_HASH =
-	"5db515d9744f71166cd313d7f1c8de59a5495abeb2c3e9bcbdec1acc75d7e2ec"
+	"c0161a5e6678caf37b6dbd45e2261de34cb18711ed6bc1ecb767ad70dfc73db5"
 /** Neutral arbiter for disputes (the platform). Demo: the `alice` CLI identity. */
 export const PLATFORM_ARBITER =
 	"GAKGQO3VCSGAVWNYI2KLT2MU2MDEHD2EHU4QASOOFRZPP7HFVCMAALJJ"
@@ -132,6 +132,7 @@ export interface Deposit {
 	amount: bigint
 	invest_bps: number
 	defindex_bps: number
+	landlord_yield_bps: number // landlord's share of the yield only (max 5%)
 	invested: bigint
 	in_blend: boolean
 	in_vault: boolean
@@ -165,6 +166,7 @@ export const getDeposit = async (contractId: string): Promise<Deposit | null> =>
 			in_blend: Boolean(d.in_blend),
 			in_vault: Boolean(d.in_vault),
 			defindex_bps: Number(d.defindex_bps ?? 0),
+			landlord_yield_bps: Number(d.landlord_yield_bps ?? 0),
 			invest_bps: Number(d.invest_bps),
 			state: stateName(d.state),
 		}

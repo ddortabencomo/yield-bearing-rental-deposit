@@ -55,7 +55,9 @@ export const RentalDeposit = () => {
 	const { address, signTransaction, updateBalances } = useWallet()
 	const [params, setParams] = useSearchParams()
 	const creating = params.get("new") === "1"
-	const contractId = params.get("id") || (creating ? "" : DEFAULT_CONTRACT)
+	const renting = params.get("rent") === "1" // tenant without a link yet
+	const contractId = params.get("id") || (creating || renting ? "" : DEFAULT_CONTRACT)
+	const [agreementInput, setAgreementInput] = useState("")
 
 	const [deposit, setDeposit] = useState<Deposit | null>(null)
 	const [position, setPosition] = useState<Position | null>(null)
@@ -70,10 +72,9 @@ export const RentalDeposit = () => {
 	// form state
 	const [tenant, setTenant] = useState("")
 	const [amount, setAmount] = useState("100")
-	const investPct = 70 // landlord's default only; the tenant picks the invested share when locking
 	const [tenantInvestPct, setTenantInvestPct] = useState(70)
-	const defindexPct = 50 // landlord's default only; the tenant picks the split when locking
 	const [tenantDfxPct, setTenantDfxPct] = useState(50)
+	const [landlordYieldPct, setLandlordYieldPct] = useState(3)
 	const [leaseDays, setLeaseDays] = useState("7")
 	const [deduction, setDeduction] = useState("12")
 	const [evidence, setEvidence] = useState("ipfs://inspection-photos")
@@ -220,8 +221,7 @@ export const RentalDeposit = () => {
 					pool: BLEND_POOL,
 					vault: DEFINDEX_VAULT,
 					amount: fundUnits,
-					invest_bps: investPct * 100,
-					defindex_bps: defindexPct * 100,
+					landlord_yield_bps: Math.round(landlordYieldPct * 100),
 					lease_end: BigInt(
 						Math.floor(Date.now() / 1000) + Math.max(1, Number(leaseDays) || 1) * 86_400,
 					),
@@ -279,11 +279,20 @@ export const RentalDeposit = () => {
 		(deposit.in_blend || deposit.in_vault) &&
 		live &&
 		now + UNWIND_WINDOW_SECS >= deposit.lease_end
-	const toLandlord = deposit
+	const deductionNow = deposit
 		? deposit.deduction < totalNow
 			? deposit.deduction
 			: totalNow
 		: 0n
+	// anything above the deposit is yield: the landlord gets their small agreed share of it
+	const yieldNow = deposit
+		? totalNow - deductionNow - (deposit.amount - deposit.deduction) > 0n
+			? totalNow - deductionNow - (deposit.amount - deposit.deduction)
+			: 0n
+		: 0n
+	const landlordYieldPctNow = deposit ? deposit.landlord_yield_bps / 100 : 0
+	const toLandlord =
+		deductionNow + (deposit ? (yieldNow * BigInt(deposit.landlord_yield_bps)) / 10000n : 0n)
 	const toTenant = totalNow - toLandlord
 
 	const fundUnits = (() => {
@@ -342,6 +351,37 @@ export const RentalDeposit = () => {
 
 			{loading ? (
 				<div className="card">Loading agreement…</div>
+			) : renting && !contractId ? (
+				/* ---------- Tenant: open the agreement the landlord sent ---------- */
+				<div className="card">
+					<h2>Open your agreement</h2>
+					<p className={styles.muted}>
+						Your landlord sends you a link to the agreement. Open it, or paste the link or
+						the agreement ID (C…) here.
+					</p>
+					<label className={styles.field}>
+						Agreement link or ID
+						<input
+							value={agreementInput}
+							onChange={(e) => setAgreementInput(e.target.value.trim())}
+							placeholder="https://…?id=C… or C…"
+						/>
+					</label>
+					<button
+						className={styles.primary}
+						disabled={!/C[A-Z2-7]{55}/.test(agreementInput)}
+						onClick={() => {
+							const m = agreementInput.match(/C[A-Z2-7]{55}/)
+							if (m) setParams({ id: m[0] })
+						}}
+					>
+						Open agreement
+					</button>
+					<p className={styles.muted}>
+						No agreement yet?{" "}
+						<a href={`/?id=${DEFAULT_CONTRACT}#app`}>See a live demo agreement</a>.
+					</p>
+				</div>
 			) : !deposit ? (
 				/* ---------- New agreement: the landlord offers the terms ---------- */
 				<div className="card">
@@ -349,8 +389,8 @@ export const RentalDeposit = () => {
 					<p className={styles.muted}>
 						The landlord proposes the agreement; the tenant accepts it by depositing.
 						The deposit is held by this neutral contract: neither party can take it
-						alone. Up to 80% earns yield in Blend; the rest stays liquid to pay
-						deductions instantly.
+						alone. Your tenant chooses how much earns yield (up to 80%); the rest stays
+						liquid to pay your deduction instantly.
 					</p>
 					<label className={styles.field}>
 						Tenant address
@@ -377,6 +417,21 @@ export const RentalDeposit = () => {
 							value={leaseDays}
 							onChange={(e) => setLeaseDays(e.target.value)}
 						/>
+					</label>
+					<label className={styles.field}>
+						Your share of the yield: <strong>{landlordYieldPct}%</strong>
+						<input
+							type="range"
+							min={0}
+							max={5}
+							step={0.5}
+							value={landlordYieldPct}
+							onChange={(e) => setLandlordYieldPct(Number(e.target.value))}
+						/>
+						<span className={styles.muted}>
+							Only of the interest, never of the deposit (max 5%). The tenant sees it before
+							accepting.
+						</span>
 					</label>
 					<p className={styles.muted}>
 						Your tenant chooses how much of the deposit earns yield (never above 80%), so at
@@ -422,6 +477,10 @@ export const RentalDeposit = () => {
 									Invested<strong>
 										{role === "Tenant" ? `${tenantInvestPct}% (your choice)` : "chosen by the tenant"}
 									</strong>
+								</div>
+								<div>
+									Landlord&apos;s share of the yield (never of the deposit)
+									<strong>{deposit.landlord_yield_bps / 100}%</strong>
 								</div>
 								<div>
 									Lease ends
@@ -500,6 +559,7 @@ export const RentalDeposit = () => {
 												amount: deposit.amount,
 												invest_bps: tenantInvestPct * 100,
 												defindex_bps: tenantDfxPct * 100,
+												landlord_yield_bps: deposit.landlord_yield_bps,
 												lease_end: BigInt(deposit.lease_end),
 											}),
 										)
@@ -637,14 +697,14 @@ export const RentalDeposit = () => {
 							<h3 className={styles.h3}>Payout if settled now</h3>
 							<div className={styles.waterfall}>
 								<div>
-									<span className={styles.wfNum}>1</span> Landlord deduction
+									<span className={styles.wfNum}>1</span> Landlord: deduction + {landlordYieldPctNow}% of the yield
 									<strong>
 										{fromUnits(toLandlord, 7)} {sym}
 									</strong>
 								</div>
 								<div>
-									<span className={styles.wfNum}>2</span> Tenant: deposit −
-									deduction + all yield
+									<span className={styles.wfNum}>2</span> Tenant: deposit − deduction +{" "}
+									{100 - landlordYieldPctNow}% of the yield
 									<strong>
 										{fromUnits(toTenant, 7)} {sym}
 									</strong>
@@ -807,14 +867,15 @@ export const RentalDeposit = () => {
 							<h2>Settled</h2>
 							<div className={styles.waterfall}>
 								<div>
-									<span className={styles.wfNum}>1</span> Landlord received
+									<span className={styles.wfNum}>1</span> Landlord received (deduction +{" "}
+									{deposit.landlord_yield_bps / 100}% of the yield)
 									<strong>
 										{fromUnits(deposit.paid_landlord, 7)} {sym}
 									</strong>
 								</div>
 								<div>
-									<span className={styles.wfNum}>2</span> Tenant received
-									(including +{fromUnits(accrued, 7)} yield)
+									<span className={styles.wfNum}>2</span> Tenant received (including{" "}
+									{100 - deposit.landlord_yield_bps / 100}% of the +{fromUnits(accrued, 7)} yield)
 									<strong>
 										{fromUnits(deposit.paid_tenant, 7)} {sym}
 									</strong>

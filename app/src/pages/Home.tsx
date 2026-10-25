@@ -1,4 +1,5 @@
 import React from "react"
+import { useNavigate } from "react-router-dom"
 import { RentalDeposit } from "../components/RentalDeposit"
 
 const Check = ({ color }: { color: string }) => (
@@ -62,6 +63,25 @@ const RuleIcon = ({ name }: { name: keyof typeof ruleIcon }) => (
 	</div>
 )
 
+/** Same-page navigation: change the query (no reload) and scroll to the app once it renders. */
+const Go = ({ to, className, style, children }: { to: string; className: string; style?: React.CSSProperties; children: React.ReactNode }) => {
+	const navigate = useNavigate()
+	return (
+		<a
+			className={className}
+			style={style}
+			href={`/${to}#app`}
+			onClick={(e) => {
+				e.preventDefault()
+				void navigate({ pathname: "/", search: to, hash: "#app" })
+				setTimeout(() => document.getElementById("app")?.scrollIntoView({ behavior: "smooth" }), 50)
+			}}
+		>
+			{children}
+		</a>
+	)
+}
+
 const Home: React.FC = () => (
 	<>
 		{/* ---------- Hero ---------- */}
@@ -78,12 +98,12 @@ const Home: React.FC = () => (
 						the money it made.
 					</p>
 					<div className="btn-row">
-						<a className="btn btn-primary" href="#app">
+						<Go className="btn btn-primary" to="?rent=1">
 							I rent a home
-						</a>
-						<a className="btn btn-outline" href="/?new=1#app">
+						</Go>
+						<Go className="btn btn-outline" to="?new=1">
 							I own a home
-						</a>
+						</Go>
 					</div>
 				</div>
 				<div className="hero-visual">
@@ -113,7 +133,7 @@ const Home: React.FC = () => (
 							</div>
 							<div className="line-item total">
 								<span>Back to you</span>
-								<span>$1,850 + all the interest</span>
+								<span>$1,850 + 97% of the interest</span>
 							</div>
 						</div>
 					</div>
@@ -169,7 +189,7 @@ const Home: React.FC = () => (
 					<div className="step">
 						<p className="step-num">4</p>
 						<h3 className="h3">You move out, money moves</h3>
-						<p>The landlord gets the agreed repairs. You get everything else, plus all the interest.</p>
+						<p>The landlord gets the agreed repairs. You get everything else, plus almost all the interest.</p>
 					</div>
 				</div>
 			</div>
@@ -185,7 +205,7 @@ const Home: React.FC = () => (
 						<ul className="checklist">
 							<li>
 								<Check color="#FDDA24" />
-								Your deposit earns interest, and the interest is yours.
+								You choose how much earns interest and where, and you keep at least 95% of it.
 							</li>
 							<li>
 								<Check color="#FDDA24" />
@@ -204,7 +224,7 @@ const Home: React.FC = () => (
 						<ul className="checklist">
 							<li>
 								<Check color="#0F0F0F" />
-								The deposit is really there, locked for the whole lease.
+								The deposit is really there, locked for the whole lease, and you earn a small share of its interest (up to 5%).
 							</li>
 							<li>
 								<Check color="#0F0F0F" />
@@ -297,15 +317,13 @@ const Home: React.FC = () => (
 					<div className="faq-item">
 						<h3 className="h3">Where does the interest come from?</h3>
 						<p>
-							Part of the deposit is lent through Blend, a lending service on the Stellar
-							network. Borrowers pay interest, and that interest goes to you.
+							Part of the deposit is lent through Blend, a lending service on the Stellar network, directly or through our DeFindex reserve, which our risk model manages. Borrowers pay interest: at least 95% goes to you, a small agreed share (3% by default) to your landlord.
 						</p>
 					</div>
 					<div className="faq-item">
 						<h3 className="h3">How much of my deposit is invested?</h3>
 						<p>
-							At most 80%. Our risk model picks the share so the chance of a delayed
-							payout stays below 0.5%, and shows you that chance before you pay.
+							You decide, up to 80%. Our risk model recommends a share that keeps the chance of a delayed payout below 0.5%, and shows you that chance before you pay.
 						</p>
 					</div>
 					<div className="faq-item">
@@ -343,12 +361,12 @@ const Home: React.FC = () => (
 						<p>Try the demo and watch a deposit make money, step by step.</p>
 					</div>
 					<div className="btn-row">
-						<a className="btn btn-dark" href="#app">
+						<Go className="btn btn-dark" to="?rent=1">
 							I rent a home
-						</a>
-						<a className="btn btn-outline" href="/?new=1#app" style={{ borderColor: "var(--white)" }}>
+						</Go>
+						<Go className="btn btn-outline" to="?new=1" style={{ borderColor: "var(--white)" }}>
 							I own a home
-						</a>
+						</Go>
 					</div>
 				</div>
 			</div>

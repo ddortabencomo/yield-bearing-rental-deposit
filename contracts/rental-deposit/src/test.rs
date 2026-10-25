@@ -125,6 +125,7 @@ struct Setup<'a> {
     arbiter: Address,
     bps: u32,
     dfx: u32,
+    ly: u32,
     end: u64,
 }
 
@@ -164,6 +165,11 @@ fn setup<'a>(bps: u32) -> Setup<'a> {
 
 /// Same, routing `dfx` (bps) of the invested share to the DeFindex vault.
 fn setup_split<'a>(bps: u32, dfx: u32) -> Setup<'a> {
+    setup_full(bps, dfx, 0)
+}
+
+/// Same, with `ly` (bps) of the yield going to the landlord.
+fn setup_full<'a>(bps: u32, dfx: u32, ly: u32) -> Setup<'a> {
     let p = parties();
     let end = p.env.ledger().timestamp() + YEAR;
     let id = p.env.register(
@@ -176,8 +182,7 @@ fn setup_split<'a>(bps: u32, dfx: u32) -> Setup<'a> {
             p.pool.clone(),
             p.vault.clone(),
             DEPOSIT,
-            bps,
-            dfx,
+            ly,
             end,
         ),
     );
@@ -197,6 +202,7 @@ fn setup_split<'a>(bps: u32, dfx: u32) -> Setup<'a> {
         arbiter: p.arbiter,
         bps,
         dfx,
+        ly,
         end,
     }
 }
@@ -205,7 +211,7 @@ fn setup_split<'a>(bps: u32, dfx: u32) -> Setup<'a> {
 fn fund(s: &Setup) {
     s.c.fund(
         &s.landlord, &s.arbiter, &s.token, &s.pool.address, &s.vault.address, &DEPOSIT, &s.bps, &s.dfx,
-        &s.end,
+        &s.ly, &s.end,
     );
 }
 
@@ -265,7 +271,7 @@ fn tenant_signature_commits_to_the_terms() {
     let s = setup(7_000);
     // Tenant believes the arbiter is someone else: funding must fail
     let other = Address::generate(&s.env);
-    s.c.fund(&s.landlord, &other, &s.token, &s.pool.address, &s.vault.address, &DEPOSIT, &s.bps, &s.dfx, &s.end);
+    s.c.fund(&s.landlord, &other, &s.token, &s.pool.address, &s.vault.address, &DEPOSIT, &s.bps, &s.dfx, &s.ly, &s.end);
 }
 
 #[test]
@@ -274,7 +280,7 @@ fn only_the_tenant_can_fund() {
     s.env.set_auths(&[]); // no signatures at all
     let r = s.c.try_fund(
         &s.landlord, &s.arbiter, &s.token, &s.pool.address, &s.vault.address, &DEPOSIT, &s.bps, &s.dfx,
-        &s.end,
+        &s.ly, &s.end,
     );
     assert!(r.is_err());
 }
@@ -313,7 +319,7 @@ fn cannot_fund_twice() {
 
 // ---------- input checks (constructor) ----------
 
-fn deploy_with(p: &Parties, tenant: &Address, arbiter: &Address, bps: u32, end: u64) {
+fn deploy_with(p: &Parties, tenant: &Address, arbiter: &Address, _bps: u32, end: u64) {
     p.env.register(
         RentalDeposit,
         (
@@ -324,7 +330,6 @@ fn deploy_with(p: &Parties, tenant: &Address, arbiter: &Address, bps: u32, end: 
             p.pool.clone(),
             p.vault.clone(),
             DEPOSIT,
-            bps,
             0u32,
             end,
         ),
@@ -334,9 +339,8 @@ fn deploy_with(p: &Parties, tenant: &Address, arbiter: &Address, bps: u32, end: 
 #[test]
 #[should_panic(expected = "invest share above 80%")]
 fn cannot_invest_more_than_80_percent() {
-    let p = parties();
-    let end = p.env.ledger().timestamp() + YEAR;
-    deploy_with(&p, &p.tenant, &p.arbiter, 9_000, end);
+    let s = setup(9_000); // the tenant asks for 90% when funding
+    fund(&s);
 }
 
 #[test]
@@ -660,7 +664,7 @@ fn tenant_chooses_the_split() {
     let s = setup_split(8_000, 5_000);
     s.c.fund(
         &s.landlord, &s.arbiter, &s.token, &s.pool.address, &s.vault.address, &DEPOSIT, &s.bps, &0u32,
-        &s.end,
+        &s.ly, &s.end,
     );
     let d = s.c.get_deposit();
     assert_eq!(d.defindex_bps, 0);
@@ -673,7 +677,7 @@ fn tenant_chooses_how_much_to_invest() {
     let s = setup(7_000);
     s.c.fund(
         &s.landlord, &s.arbiter, &s.token, &s.pool.address, &s.vault.address, &DEPOSIT, &0u32, &s.dfx,
-        &s.end,
+        &s.ly, &s.end,
     );
     let d = s.c.get_deposit();
     assert_eq!(d.invest_bps, 0);
@@ -687,7 +691,7 @@ fn tenant_invest_share_is_capped() {
     let s = setup(7_000);
     s.c.fund(
         &s.landlord, &s.arbiter, &s.token, &s.pool.address, &s.vault.address, &DEPOSIT, &8_001u32,
-        &s.dfx, &s.end,
+        &s.dfx, &s.ly, &s.end,
     );
 }
 
@@ -697,7 +701,7 @@ fn tenant_split_is_capped() {
     let s = setup_split(8_000, 5_000);
     s.c.fund(
         &s.landlord, &s.arbiter, &s.token, &s.pool.address, &s.vault.address, &DEPOSIT, &s.bps,
-        &10_001u32, &s.end,
+        &10_001u32, &s.ly, &s.end,
     );
 }
 
@@ -718,6 +722,7 @@ fn contract_authorizes_the_vault_pull_itself() {
         DEPOSIT,
         s.bps,
         s.dfx,
+        s.ly,
         s.end,
     )
         .into_val(&s.env);
@@ -739,4 +744,62 @@ fn contract_authorizes_the_vault_pull_itself() {
     fund(&s);
     assert_eq!(s.t.balance(&s.vault.address), 703 * USDC);
     assert!(s.c.get_deposit().in_vault);
+}
+
+// ---------- landlord's share of the yield ----------
+
+#[test]
+fn landlord_gets_a_small_share_of_the_yield_only() {
+    let s = setup_full(7_000, 0, 500); // 5% of the yield
+    fund(&s);
+    jump_to(&s, s.end);
+    s.c.propose_deduction(&(120 * USDC), &String::from_str(&s.env, "ipfs://x"));
+    s.c.accept_and_release();
+    let d = s.c.get_deposit();
+    // 7 USDC of yield: 5% = 0.35 to the landlord, 6.65 to the tenant; the deposit is untouched
+    assert_eq!(d.paid_landlord, 120 * USDC + 3_500_000);
+    assert_eq!(d.paid_tenant, 880 * USDC + 66_500_000);
+}
+
+#[test]
+fn no_yield_no_landlord_share() {
+    let s = setup_full(0, 0, 500); // nothing invested, so nothing earned
+    fund(&s);
+    jump_to(&s, s.end);
+    s.c.propose_deduction(&(120 * USDC), &String::from_str(&s.env, "ipfs://x"));
+    s.c.accept_and_release();
+    let d = s.c.get_deposit();
+    assert_eq!(d.paid_landlord, 120 * USDC);
+    assert_eq!(d.paid_tenant, 880 * USDC);
+}
+
+#[test]
+#[should_panic(expected = "landlord yield share above 5%")]
+fn landlord_yield_share_is_capped() {
+    setup_full(7_000, 0, 501);
+}
+
+#[test]
+#[should_panic(expected = "terms mismatch")]
+fn tenant_commits_to_the_landlord_share() {
+    let s = setup_full(7_000, 0, 300);
+    s.c.fund(
+        &s.landlord, &s.arbiter, &s.token, &s.pool.address, &s.vault.address, &DEPOSIT, &s.bps, &s.dfx,
+        &0u32, &s.end,
+    );
+}
+
+#[test]
+fn landlord_share_works_when_money_comes_back_in_two_steps() {
+    let s = setup_full(7_000, 0, 500);
+    fund(&s);
+    propose(&s, 120 * USDC);
+    s.pool.set_illiquid(&true);
+    s.c.accept_and_release(); // buffer: 120 to the landlord, 180 (deposit) to the tenant
+    assert_eq!(s.t.balance(&s.landlord), 120 * USDC);
+    assert_eq!(s.t.balance(&s.tenant), 180 * USDC);
+    s.pool.set_illiquid(&false);
+    s.c.claim_remaining(); // 707 back: 700 deposit to the tenant, 7 yield split 5% / 95%
+    assert_eq!(s.t.balance(&s.landlord), 120 * USDC + 3_500_000);
+    assert_eq!(s.t.balance(&s.tenant), 880 * USDC + 66_500_000);
 }

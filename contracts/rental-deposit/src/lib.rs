@@ -18,6 +18,8 @@ use soroban_sdk::{
 
 /// Max share of the deposit that can go to Blend (80%). The rest is the liquidity buffer.
 const MAX_INVEST_BPS: u32 = 8_000;
+/// The landlord can get a small share of the YIELD (never of the deposit): at most 5%.
+const MAX_LANDLORD_YIELD_BPS: u32 = 500;
 const REQ_SUPPLY: u32 = 0;
 const REQ_WITHDRAW: u32 = 1;
 const DAY: u64 = 86_400;
@@ -92,6 +94,7 @@ pub struct Deposit {
     pub amount: i128,        // USDC has 7 decimals: 1 USDC = 10_000_000
     pub invest_bps: u32,     // share of the deposit invested, in basis points (7000 = 70%)
     pub defindex_bps: u32,   // part of the invested share routed to the DeFindex vault
+    pub landlord_yield_bps: u32, // landlord's share of the yield only (max 5%), the adoption incentive
     pub invested: i128,      // total amount invested (Blend + DeFindex)
     pub in_blend: bool,      // true while funds sit in Blend
     pub in_vault: bool,      // true while we hold DeFindex vault shares
@@ -206,6 +209,7 @@ fn pay_out(env: &Env, d: &mut Deposit) {
     let t = token::Client::new(env, &d.token);
     let mut available = t.balance(&me);
 
+    // 1) the agreed deduction goes to the landlord first
     let to_landlord = d.owed_landlord.min(available);
     if to_landlord > 0 {
         t.transfer(&me, &d.landlord, &to_landlord);
@@ -213,9 +217,24 @@ fn pay_out(env: &Env, d: &mut Deposit) {
         d.owed_landlord -= to_landlord;
         available -= to_landlord;
     }
-    if d.owed_landlord == 0 && available > 0 {
-        t.transfer(&me, &d.tenant, &available);
-        d.paid_tenant += available;
+    if d.owed_landlord > 0 || available <= 0 {
+        return;
+    }
+    // 2) the rest of the deposit goes to the tenant, untouched
+    let principal_left = (d.amount - d.deduction - d.paid_tenant).max(0);
+    let principal = principal_left.min(available);
+    // 3) anything above the deposit is yield: a small agreed share to the landlord, the rest
+    //    to the tenant. With losses there is no yield, so the landlord gets nothing extra.
+    let yield_part = available - principal;
+    let landlord_share = yield_part * d.landlord_yield_bps as i128 / 10_000;
+    if landlord_share > 0 {
+        t.transfer(&me, &d.landlord, &landlord_share);
+        d.paid_landlord += landlord_share;
+    }
+    let to_tenant = available - landlord_share;
+    if to_tenant > 0 {
+        t.transfer(&me, &d.tenant, &to_tenant);
+        d.paid_tenant += to_tenant;
     }
 }
 
@@ -243,15 +262,13 @@ impl RentalDeposit {
         pool: Address,
         vault: Address,
         amount: i128,
-        invest_bps: u32,
-        defindex_bps: u32,
+        landlord_yield_bps: u32,
         lease_end: u64,
     ) {
         landlord.require_auth();
         let now = env.ledger().timestamp();
         assert!(amount > 0, "amount must be positive");
-        assert!(invest_bps <= MAX_INVEST_BPS, "invest share above 80%");
-        assert!(defindex_bps <= 10_000, "split above 100%");
+        assert!(landlord_yield_bps <= MAX_LANDLORD_YIELD_BPS, "landlord yield share above 5%");
         assert!(tenant != landlord, "tenant and landlord must differ");
         assert!(arbiter != tenant && arbiter != landlord, "arbiter must be neutral");
         assert!(lease_end > now, "lease already ended");
@@ -267,8 +284,9 @@ impl RentalDeposit {
                 pool,
                 vault,
                 amount,
-                invest_bps,
-                defindex_bps,
+                invest_bps: 0,   // chosen by the tenant in `fund`
+                defindex_bps: 0, // chosen by the tenant in `fund`
+                landlord_yield_bps,
                 invested: 0,
                 in_blend: false,
                 in_vault: false,
@@ -290,7 +308,7 @@ impl RentalDeposit {
     /// `invest_bps` and `defindex_bps` are the tenant's own choice (the yield and its risk are
     /// theirs): how much to invest (never above 80%, so the landlord is always protected by a
     /// liquid buffer of at least 20% plus the unwind window) and how to split it between Blend
-    /// and the DeFindex reserve. The landlord's values are only defaults.
+    /// and the DeFindex reserve. 
     pub fn fund(
         env: Env,
         landlord: Address,
@@ -301,6 +319,7 @@ impl RentalDeposit {
         amount: i128,
         invest_bps: u32,
         defindex_bps: u32,
+        landlord_yield_bps: u32,
         lease_end: u64,
     ) {
         let mut d = load(&env);
@@ -313,6 +332,7 @@ impl RentalDeposit {
                 && pool == d.pool
                 && vault == d.vault
                 && amount == d.amount
+                && landlord_yield_bps == d.landlord_yield_bps
                 && lease_end == d.lease_end,
             "terms mismatch"
         );
