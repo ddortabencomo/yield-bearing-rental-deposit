@@ -27,12 +27,14 @@ export const QuantPanel = ({
 	onInvestPct,
 	leaseDays,
 	symbol,
+	readOnly = false,
 }: {
 	amount: bigint
 	investPct: number
 	onInvestPct: (pct: number) => void
 	leaseDays: number
 	symbol: string
+	readOnly?: boolean
 }) => {
 	const [rates, setRates] = useState<PoolRates | null>(null)
 	const [open, setOpen] = useState(false)
@@ -59,7 +61,7 @@ export const QuantPanel = ({
 				<span>
 					Recommended: <strong>{recommended}% invested</strong>
 				</span>
-				{investPct !== recommended && (
+				{!readOnly && investPct !== recommended && (
 					<button type="button" onClick={() => onInvestPct(recommended)}>
 						Apply
 					</button>

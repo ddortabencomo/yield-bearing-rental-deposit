@@ -1,11 +1,11 @@
-import { errorMessage, networkPassphrase, rpcUrl } from "@stellar-scaffold/app-lib"
-import { contract } from "@stellar/stellar-sdk"
+import { errorMessage } from "@stellar-scaffold/app-lib"
 import { useCallback, useEffect, useState } from "react"
 import { useSearchParams } from "react-router-dom"
 import { useWallet } from "../hooks/useWallet"
 import { QuantPanel } from "./QuantPanel"
 import {
 	BLEND_POOL,
+	createAgreement,
 	DEFAULT_CONTRACT,
 	type Deposit,
 	explorerContract,
@@ -24,19 +24,21 @@ import {
 	TOKEN_SYMBOL,
 	symbolOf,
 	UNWIND_WINDOW_SECS,
-	WASM_HASH,
 } from "../lib/rental"
 import styles from "./RentalDeposit.module.css"
 
-const STEPS = ["Fund", "Earn", "Propose", "Settle"] as const
+const STEPS = ["Agree", "Earn", "Propose", "Settle"] as const
 
 const stepIndex = (d: Deposit | null): number => {
 	if (!d) return 0
 	switch (d.state) {
+		case "Offered":
+			return 0
 		case "Funded":
 			return 1
 		case "DeductionProposed":
 		case "Disputed":
+		case "Settling":
 			return 3
 		case "Closed":
 			return 4
@@ -48,7 +50,8 @@ const short = (a: string) => `${a.slice(0, 4)}…${a.slice(-4)}`
 export const RentalDeposit = () => {
 	const { address, signTransaction, updateBalances } = useWallet()
 	const [params, setParams] = useSearchParams()
-	const contractId = params.get("id") || DEFAULT_CONTRACT
+	const creating = params.get("new") === "1"
+	const contractId = params.get("id") || (creating ? "" : DEFAULT_CONTRACT)
 
 	const [deposit, setDeposit] = useState<Deposit | null>(null)
 	const [position, setPosition] = useState<Position | null>(null)
@@ -59,7 +62,7 @@ export const RentalDeposit = () => {
 	const [lastTx, setLastTx] = useState<{ label: string; hash?: string }>()
 
 	// form state
-	const [landlord, setLandlord] = useState("")
+	const [tenant, setTenant] = useState("")
 	const [amount, setAmount] = useState("100")
 	const [investPct, setInvestPct] = useState(70)
 	const [leaseDays, setLeaseDays] = useState("7")
@@ -67,10 +70,20 @@ export const RentalDeposit = () => {
 	const [evidence, setEvidence] = useState("ipfs://inspection-photos")
 
 	const refresh = useCallback(async () => {
+		if (!contractId) {
+			// New agreement: nothing on-chain yet, show the landlord's form
+			setDeposit(null)
+			setPosition(null)
+			setLoading(false)
+			return
+		}
 		const d = await getDeposit(contractId)
 		setDeposit(d)
-		if (d && d.state === "Closed") setLiquid(0n) // everything was paid out
-		if (d && d.state !== "Closed") {
+		const active =
+			d &&
+			(d.state === "Funded" || d.state === "DeductionProposed" || d.state === "Disputed")
+		if (d && !active) setLiquid(0n) // not funded yet, or the buffer was already paid out
+		if (d && active) {
 			if (d.in_blend) {
 				// While invested, the contract holds exactly the buffer (enforced on-chain)
 				setLiquid(d.amount - d.invested)
@@ -155,28 +168,49 @@ export const RentalDeposit = () => {
 		}
 	}
 
-	const newAgreement = async () => {
+	/** Open the landlord's form for a new agreement (nothing is deployed yet). */
+	const newAgreement = () => {
+		setError(undefined)
+		setLastTx(undefined)
+		setParams({ new: "1" })
+	}
+
+	/** Landlord: deploy a new agreement with its terms in one transaction. */
+	const offerTerms = async () => {
 		if (!address) {
 			setError("Connect your wallet first.")
 			return
 		}
-		setBusy("Creating agreement")
+		setBusy("Terms offered")
 		setError(undefined)
 		try {
-			const tx = await contract.Client.deploy(null, {
-				wasmHash: WASM_HASH,
-				publicKey: address,
-				signTransaction,
-				rpcUrl,
-				networkPassphrase,
-			})
-			const sent = await tx.signAndSend()
-			const client = sent.result as contract.Client
-			setParams({ id: client.options.contractId })
-			setLastTx({
-				label: "Agreement created",
-				hash: sent.sendTransactionResponse?.hash,
-			})
+			// The landlord must be able to receive the token, or settlement would fail
+			try {
+				await getBalance(address, TOKEN)
+			} catch {
+				throw new Error(
+					`Your wallet can't receive ${sym} yet (no trustline). Add ${sym} to your wallet first.`,
+				)
+			}
+			const { id, hash } = await createAgreement(
+				{
+					landlord: address,
+					tenant,
+					arbiter: PLATFORM_ARBITER,
+					token: TOKEN,
+					pool: BLEND_POOL,
+					amount: fundUnits,
+					invest_bps: investPct * 100,
+					lease_end: BigInt(
+						Math.floor(Date.now() / 1000) + Math.max(1, Number(leaseDays) || 1) * 86_400,
+					),
+				},
+				address,
+				signTransaction as unknown as Signer,
+			)
+			setParams({ id })
+			setLastTx({ label: "Agreement created and terms offered", hash })
+			await updateBalances()
 		} catch (e) {
 			console.error(e)
 			setError(errorMessage(e))
@@ -201,19 +235,23 @@ export const RentalDeposit = () => {
 		? (position?.value ?? deposit.invested)
 		: 0n
 	const totalNow = buffer + investedValue
+	const paidSoFar = deposit ? deposit.paid_landlord + deposit.paid_tenant : 0n
+	const grossNow = totalNow + paidSoFar // everything the deposit is worth, paid or not
 	const accrued =
-		deposit && deposit.state !== "Closed"
-			? totalNow > deposit.amount
-				? totalNow - deposit.amount
-				: 0n
-			: deposit
-				? deposit.paid_landlord + deposit.paid_tenant - deposit.amount
-				: 0n
+		deposit && deposit.state !== "Offered" && grossNow > deposit.amount
+			? grossNow - deposit.amount
+			: 0n
+	const cancelled = deposit?.state === "Closed" && paidSoFar === 0n
+	const live =
+		!!deposit &&
+		(deposit.state === "Funded" ||
+			deposit.state === "DeductionProposed" ||
+			deposit.state === "Disputed")
 	const now = Math.floor(Date.now() / 1000)
 	const canUnwind =
 		!!deposit &&
 		deposit.in_blend &&
-		deposit.state !== "Closed" &&
+		live &&
 		now + UNWIND_WINDOW_SECS >= deposit.lease_end
 	const toLandlord = deposit
 		? deposit.deduction < totalNow
@@ -240,9 +278,13 @@ export const RentalDeposit = () => {
 			<div className={styles.agreementBar}>
 				<div>
 					<span className={styles.label}>Agreement</span>{" "}
-					<a href={explorerContract(contractId)} target="_blank" rel="noreferrer">
-						<code>{short(contractId)}</code>
-					</a>
+					{contractId ? (
+						<a href={explorerContract(contractId)} target="_blank" rel="noreferrer">
+							<code>{short(contractId)}</code>
+						</a>
+					) : (
+						<code>new</code>
+					)}
 					{role && <span className={styles.role}>You: {role}</span>}
 				</div>
 				<button onClick={() => void newAgreement()} disabled={!!busy}>
@@ -268,19 +310,20 @@ export const RentalDeposit = () => {
 			{loading ? (
 				<div className="card">Loading agreement…</div>
 			) : !deposit ? (
-				/* ---------- Not funded: tenant funds ---------- */
+				/* ---------- New agreement: the landlord offers the terms ---------- */
 				<div className="card">
-					<h2>Lock the deposit</h2>
+					<h2>Offer the terms</h2>
 					<p className={styles.muted}>
-						The tenant deposits into this neutral contract. Neither party can
-						withdraw on their own. Up to 80% earns yield in Blend; the rest
-						stays liquid to pay deductions instantly.
+						The landlord proposes the agreement; the tenant accepts it by depositing.
+						The deposit is held by this neutral contract: neither party can take it
+						alone. Up to 80% earns yield in Blend; the rest stays liquid to pay
+						deductions instantly.
 					</p>
 					<label className={styles.field}>
-						Landlord address
+						Tenant address
 						<input
-							value={landlord}
-							onChange={(e) => setLandlord(e.target.value.trim())}
+							value={tenant}
+							onChange={(e) => setTenant(e.target.value.trim())}
 							placeholder="G..."
 						/>
 					</label>
@@ -328,44 +371,104 @@ export const RentalDeposit = () => {
 						leaseDays={Number(leaseDays) || 1}
 						symbol={sym}
 					/>
+					<p className={styles.muted}>
+						Disputes are decided by a neutral arbiter ({short(PLATFORM_ARBITER)}).
+					</p>
 					<button
 						className={styles.primary}
-						disabled={!!busy || !address || !landlord || fundUnits <= 0n}
-						onClick={() =>
-							void run("Deposit locked", async () => {
-								// The landlord must be able to receive the token, or settlement would fail
-								try {
-									await getBalance(landlord, TOKEN)
-								} catch {
-									throw new Error(
-										`The landlord's wallet can't receive ${sym} yet (no trustline). Ask them to add ${sym} first.`,
-									)
-								}
-								return build(
-									contractId,
-									"fund",
-									{
-										tenant: address,
-										landlord,
-										arbiter: PLATFORM_ARBITER,
-										token: TOKEN,
-										pool: BLEND_POOL,
-										amount: fundUnits,
-										invest_bps: investPct * 100,
-										lease_end: BigInt(
-											Math.floor(Date.now() / 1000) +
-												Math.max(1, Number(leaseDays) || 1) * 86_400,
-										),
-									},
-									{ publicKey: address },
-								)
-							})
-						}
+						disabled={!!busy || !address || !tenant || fundUnits <= 0n}
+						onClick={() => void offerTerms()}
 					>
-						{busy === "Deposit locked" ? "Signing…" : "Lock deposit"}
+						{busy === "Terms offered" ? "Signing…" : "Offer terms to the tenant"}
 					</button>
 					{!address && (
-						<p className={styles.muted}>Connect the tenant&apos;s wallet to continue.</p>
+						<p className={styles.muted}>Connect the landlord&apos;s wallet to continue.</p>
+					)}
+				</div>
+			) : deposit.state === "Offered" || cancelled ? (
+				/* ---------- Offered: the tenant reviews and accepts by depositing ---------- */
+				<div className="card">
+					{cancelled ? (
+						<>
+							<h2>Offer cancelled</h2>
+							<p className={styles.muted}>
+								The landlord withdrew this offer before it was funded. No money moved.
+							</p>
+						</>
+					) : (
+						<>
+							<h2>
+								Terms offered: {fromUnits(deposit.amount)} {sym} deposit
+							</h2>
+							<div className={styles.waterfall}>
+								<div>
+									Landlord<strong>{short(deposit.landlord)}</strong>
+								</div>
+								<div>
+									Tenant<strong>{short(deposit.tenant)}</strong>
+								</div>
+								<div>
+									Invested in Blend<strong>{deposit.invest_bps / 100}%</strong>
+								</div>
+								<div>
+									Lease ends
+									<strong>{new Date(deposit.lease_end * 1000).toLocaleDateString()}</strong>
+								</div>
+								<div>
+									Neutral arbiter<strong>{short(deposit.arbiter)}</strong>
+								</div>
+							</div>
+							<QuantPanel
+								amount={deposit.amount}
+								investPct={deposit.invest_bps / 100}
+								onInvestPct={() => {}}
+								leaseDays={Math.max(1, Math.round((deposit.lease_end - now) / 86_400))}
+								symbol={sym}
+								readOnly
+							/>
+							{role === "Tenant" ? (
+								<button
+									className={styles.primary}
+									disabled={!!busy}
+									onClick={() =>
+										void run("Deposit locked", () =>
+											build(contractId, "fund", {
+												landlord: deposit.landlord,
+												arbiter: deposit.arbiter,
+												token: deposit.token,
+												pool: deposit.pool,
+												amount: deposit.amount,
+												invest_bps: deposit.invest_bps,
+												lease_end: BigInt(deposit.lease_end),
+											}),
+										)
+									}
+								>
+									{busy === "Deposit locked" ? "Signing…" : "Accept terms & lock deposit"}
+								</button>
+							) : role === "Landlord" ? (
+								<>
+									<p className={styles.muted}>
+										Waiting for your tenant to accept. Send them this page&apos;s
+										link:
+									</p>
+									<p>
+										<code>{window.location.href}</code>
+									</p>
+									<button
+										disabled={!!busy}
+										onClick={() => void run("Offer cancelled", () => build(contractId, "cancel_offer"))}
+									>
+										Cancel offer
+									</button>
+								</>
+							) : (
+								<p className={styles.muted}>
+									Waiting for the tenant ({short(deposit.tenant)}) to accept. Connect
+									the tenant&apos;s wallet to continue.
+								</p>
+							)}
+						</>
 					)}
 				</div>
 			) : (
@@ -401,7 +504,7 @@ export const RentalDeposit = () => {
 								{fromUnits(buffer)} {sym}
 							</strong>
 							<span className={styles.muted}>
-								{deposit.state === "Closed"
+								{deposit.state === "Closed" || deposit.state === "Settling"
 									? "paid out at settlement"
 									: "held in the contract · pays deductions instantly"}
 							</span>
@@ -422,7 +525,7 @@ export const RentalDeposit = () => {
 					</div>
 
 					{/* ---------- Waterfall ---------- */}
-					{deposit.state !== "Closed" && (
+					{live && (
 						<div className="card">
 							<h3 className={styles.h3}>Payout if settled now</h3>
 							<div className={styles.waterfall}>
@@ -536,8 +639,10 @@ export const RentalDeposit = () => {
 								</div>
 							)}
 							<p className={styles.muted}>
-								Accepting withdraws everything from Blend and pays out with the
-								waterfall in one transaction.
+								Accepting pays out with the waterfall in one transaction. If Blend
+								can&apos;t return its part that day, the liquid buffer still pays
+								right away (landlord first) and the rest follows when liquidity is
+								back.
 							</p>
 						</div>
 					)}
@@ -551,6 +656,42 @@ export const RentalDeposit = () => {
 								neutral arbiter ({short(deposit.arbiter)}) resolves the dispute. The
 								arbiter can never award more than the landlord asked.
 							</p>
+						</div>
+					)}
+
+					{deposit.state === "Settling" && (
+						<div className={`card ${styles.warn}`}>
+							<h2>Partly paid out: waiting for Blend liquidity</h2>
+							<p>
+								The liquid buffer has been paid with the waterfall. Blend can&apos;t
+								return the invested part right now (the pool is heavily borrowed),
+								so it stays there, still earning, until anyone claims it.
+							</p>
+							<div className={styles.waterfall}>
+								<div>
+									<span className={styles.wfNum}>1</span> Landlord paid so far
+									<strong>
+										{fromUnits(deposit.paid_landlord, 7)} {sym}
+										{deposit.owed_landlord > 0n
+											? ` (still owed ${fromUnits(deposit.owed_landlord, 7)})`
+											: ""}
+									</strong>
+								</div>
+								<div>
+									<span className={styles.wfNum}>2</span> Tenant paid so far
+									<strong>
+										{fromUnits(deposit.paid_tenant, 7)} {sym}
+									</strong>
+								</div>
+							</div>
+							<button
+								disabled={!!busy}
+								onClick={() =>
+									void run("Remaining claimed", () => build(contractId, "claim_remaining"))
+								}
+							>
+								Claim the rest from Blend
+							</button>
 						</div>
 					)}
 

@@ -31,7 +31,7 @@ export const symbolOf = (token: string) =>
 export const DECIMALS = 7
 /** RentalDeposit wasm already uploaded to testnet: new agreements are instances of it. */
 export const WASM_HASH =
-	"12a84cd129de71135854a746df7d7d7b9143031f389fb81c6176942e5375e680"
+	"0853eb87a72d829e78502c214874919c4af18c3b0dfbab2a71a7e26323c94537"
 /** Neutral arbiter for disputes (the platform). Demo: the `alice` CLI identity. */
 export const PLATFORM_ARBITER =
 	"GAKGQO3VCSGAVWNYI2KLT2MU2MDEHD2EHU4QASOOFRZPP7HFVCMAALJJ"
@@ -109,7 +109,13 @@ export const read = async <T>(
 
 // ---------- Deposit state ----------
 
-export type StateName = "Funded" | "DeductionProposed" | "Disputed" | "Closed"
+export type StateName =
+	| "Offered"
+	| "Funded"
+	| "DeductionProposed"
+	| "Disputed"
+	| "Settling"
+	| "Closed"
 
 export interface Deposit {
 	tenant: string
@@ -125,6 +131,7 @@ export interface Deposit {
 	deduction: bigint
 	evidence: string
 	proposed_at: number
+	owed_landlord: bigint
 	paid_landlord: bigint
 	paid_tenant: bigint
 	state: StateName
@@ -142,6 +149,7 @@ export const getDeposit = async (contractId: string): Promise<Deposit | null> =>
 			amount: BigInt(d.amount as bigint),
 			invested: BigInt(d.invested as bigint),
 			deduction: BigInt(d.deduction as bigint),
+			owed_landlord: BigInt((d.owed_landlord as bigint) ?? 0n),
 			paid_landlord: BigInt(d.paid_landlord as bigint),
 			paid_tenant: BigInt(d.paid_tenant as bigint),
 			lease_end: Number(d.lease_end),
@@ -220,14 +228,20 @@ export type Signer = (
 	opts: { networkPassphrase: string; address: string },
 ) => Promise<{ signedTxXdr: string }>
 
-const submit = async (tx: Transaction | ReturnType<typeof TransactionBuilder.fromXDR>) => {
+type Sent = { hash: string; returnValue?: xdr.ScVal }
+
+const submit = async (
+	tx: Transaction | ReturnType<typeof TransactionBuilder.fromXDR>,
+): Promise<Sent> => {
 	const res = await server.sendTransaction(tx)
 	if (res.status === "ERROR") {
 		throw new Error(`Transaction rejected: ${res.errorResult?.result().switch().name ?? "error"}`)
 	}
 	for (let i = 0; i < 30; i++) {
 		const got = await server.getTransaction(res.hash)
-		if (got.status === rpc.Api.GetTransactionStatus.SUCCESS) return res.hash
+		if (got.status === rpc.Api.GetTransactionStatus.SUCCESS) {
+			return { hash: res.hash, returnValue: got.returnValue }
+		}
 		if (got.status === rpc.Api.GetTransactionStatus.FAILED) {
 			throw new Error(`Transaction failed on-chain (${res.hash.slice(0, 8)}…)`)
 		}
@@ -254,6 +268,35 @@ export const invoke = async (
 		method,
 		...client.spec.funcArgsToScVals(method, args ?? {}),
 	)
+	return (await sendOp(op, source, sign)).hash
+}
+
+/**
+ * Landlord creates a new agreement: deploys a RentalDeposit instance and runs its
+ * constructor with the terms in the same transaction. Returns the new contract id.
+ */
+export const createAgreement = async (
+	terms: Record<string, unknown>,
+	source: string,
+	sign: Signer,
+): Promise<{ id: string; hash: string }> => {
+	const wasm = await server.getContractWasmByHash(WASM_HASH, "hex")
+	const spec = contract.Spec.fromWasm(wasm)
+	const salt = new Uint8Array(32)
+	crypto.getRandomValues(salt)
+	const op = Operation.createCustomContract({
+		address: new Address(source),
+		wasmHash: Buffer.from(WASM_HASH, "hex"),
+		salt: Buffer.from(salt),
+		constructorArgs: spec.funcArgsToScVals("__constructor", terms),
+	})
+	const sent = await sendOp(op, source, sign)
+	if (!sent.returnValue) throw new Error("Deployment returned no contract id")
+	return { id: Address.fromScVal(sent.returnValue).toString(), hash: sent.hash }
+}
+
+/** Simulate, sign (with fee bump if needed) and submit one Soroban operation. */
+const sendOp = async (op: xdr.Operation, source: string, sign: Signer): Promise<Sent> => {
 	const acc = await server.getAccount(source)
 	const seq = acc.sequenceNumber()
 	const raw = new TransactionBuilder(new Account(source, seq), {
@@ -280,7 +323,7 @@ export const invoke = async (
 
 	// ---- fee-bump path ----
 	const auth = sim.result?.auth ?? []
-	const func = op.body().invokeHostFunctionOp().hostFunction()
+	const func = op.body().invokeHostFunctionOp().hostFunction() // deploy is a host function too
 	const zero = xdr.SorobanTransactionData.fromXDR(data.toXDR())
 	zero.resourceFee(xdr.Int64.fromString("0"))
 	const draft = new TransactionBuilder(new Account(source, seq), {
