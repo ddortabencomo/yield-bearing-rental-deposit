@@ -588,6 +588,49 @@ export const RentalDeposit = () => {
 						</div>
 					</div>
 
+					{/* ---------- Allocation: where the deposit is right now ---------- */}
+					{deposit.state !== "Offered" && deposit.state !== "Closed" && (() => {
+						const pctInv = deposit.invest_bps / 100
+						const pctVault = (deposit.invest_bps * deposit.defindex_bps) / 1_000_000
+						const pctBlend = pctInv - pctVault
+						const pctBuf = 100 - pctInv
+						const fmt = (x: number) => `${Math.round(x * 10) / 10}%`
+						const parts = [
+							{ name: "Blend direct", pct: pctBlend, value: blendValue, cls: styles.splitInvest },
+							{ name: "DeFindex reserve", pct: pctVault, value: vaultValue, cls: styles.splitVault },
+							{ name: "Liquid buffer", pct: pctBuf, value: buffer, cls: styles.splitBuffer },
+						]
+						return (
+							<div className="card">
+								<h3 className={styles.h3}>Where the deposit is</h3>
+								<div className={styles.split}>
+									{parts
+										.filter((x) => x.pct > 0)
+										.map((x) => (
+											<div key={x.name} style={{ flex: x.pct }} className={x.cls}>
+												{fmt(x.pct)}
+											</div>
+										))}
+								</div>
+								<div className={styles.waterfall}>
+									{parts.map((x) => (
+										<div key={x.name}>
+											{x.name} · {fmt(x.pct)}
+											<strong>
+												{fromUnits(x.value)} {sym}
+											</strong>
+										</div>
+									))}
+								</div>
+								<p className={styles.muted}>
+									Chosen by the tenant: {fmt(pctInv)} invested, split {fmt(100 - deposit.defindex_bps / 100)} Blend
+									/ {fmt(deposit.defindex_bps / 100)} DeFindex. Percentages are of the whole deposit;
+									amounts are live.
+								</p>
+							</div>
+						)
+					})()}
+
 					{/* ---------- Waterfall ---------- */}
 					{live && (
 						<div className="card">
