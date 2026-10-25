@@ -1,5 +1,5 @@
 import { errorMessage } from "@stellar-scaffold/app-lib"
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { useSearchParams } from "react-router-dom"
 import { useWallet } from "../hooks/useWallet"
 import { QuantPanel } from "./QuantPanel"
@@ -78,6 +78,14 @@ export const RentalDeposit = () => {
 	const [leaseDays, setLeaseDays] = useState("7")
 	const [deduction, setDeduction] = useState("12")
 	const [evidence, setEvidence] = useState("ipfs://inspection-photos")
+
+	const scrolledOnLoad = useRef(false)
+	useEffect(() => {
+		if (!loading && !scrolledOnLoad.current && window.location.hash === "#app") {
+			scrolledOnLoad.current = true
+			setTimeout(() => document.getElementById("app")?.scrollIntoView(), 50)
+		}
+	}, [loading])
 
 	const refresh = useCallback(async () => {
 		if (!contractId) {
@@ -379,7 +387,15 @@ export const RentalDeposit = () => {
 					</button>
 					<p className={styles.muted}>
 						No agreement yet?{" "}
-						<a href={`/?id=${DEFAULT_CONTRACT}#app`}>See a live demo agreement</a>.
+						<a
+							href={`/?id=${DEFAULT_CONTRACT}#app`}
+							onClick={(e) => {
+								e.preventDefault()
+								setParams({ id: DEFAULT_CONTRACT })
+							}}
+						>
+							See a live demo agreement
+						</a>.
 					</p>
 				</div>
 			) : !deposit ? (
