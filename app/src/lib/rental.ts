@@ -41,7 +41,7 @@ export const UNWIND_WINDOW_SECS = 30 * 86_400
 export const MAX_INVEST_BPS = 8000
 /** Default instance (overridden by ?id=C... in the URL). */
 export const DEFAULT_CONTRACT =
-	"CDHLU2JWJXOQJTU73ETKEJNSZVLWPQ47XRCHRDEGGIREE7D2KMUXJXTH"
+	"CAUS4P47QJ4Y6L4NSAB45PUFOWLAFNMNHUGW6G2UCRTD3LCWH2ETWD2R"
 
 export const explorerTx = (hash: string) =>
 	`https://stellar.expert/explorer/testnet/tx/${hash}`

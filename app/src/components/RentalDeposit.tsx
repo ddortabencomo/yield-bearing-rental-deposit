@@ -18,6 +18,7 @@ import {
 	type Signer,
 	MAX_INVEST_BPS,
 	PLATFORM_ARBITER,
+	ASSETS,
 	type Position,
 	toUnits,
 	TOKEN,
@@ -269,6 +270,11 @@ export const RentalDeposit = () => {
 	})()
 	const fundInvested = (fundUnits * BigInt(investPct * 100)) / 10000n
 
+	// The landlord picks the pool and token: only accept the official Blend pool and assets
+	const trustedTerms =
+		!!deposit &&
+		deposit.pool === BLEND_POOL &&
+		(Object.values(ASSETS) as string[]).includes(deposit.token)
 	const current = stepIndex(deposit)
 	const sym = deposit ? symbolOf(deposit.token) : TOKEN_SYMBOL
 
@@ -426,10 +432,16 @@ export const RentalDeposit = () => {
 								symbol={sym}
 								readOnly
 							/>
+							{!trustedTerms && (
+								<div className={`card ${styles.err}`} role="alert">
+									Warning: this agreement does not use the official Blend pool or a
+									supported token. Do not deposit.
+								</div>
+							)}
 							{role === "Tenant" ? (
 								<button
 									className={styles.primary}
-									disabled={!!busy}
+									disabled={!!busy || !trustedTerms}
 									onClick={() =>
 										void run("Deposit locked", () =>
 											build(contractId, "fund", {

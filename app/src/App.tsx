@@ -20,7 +20,7 @@ function App() {
 const AppLayout = () => (
 	<div className={styles.AppLayout}>
 		<header className={styles.header}>
-			<span className={styles.logo}>Yield-Bearing Rental Deposits</span>
+			<span className={styles.logo}>Blendlord</span>
 			<nav className={styles.headerNav}>
 				<NavLink
 					to="/debug"
