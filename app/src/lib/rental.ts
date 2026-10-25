@@ -1,4 +1,16 @@
-import { contract } from "@stellar/stellar-sdk"
+import {
+	Account,
+	Address,
+	contract,
+	BASE_FEE,
+	Contract,
+	Operation,
+	rpc,
+	scValToNative,
+	Transaction,
+	TransactionBuilder,
+	xdr,
+} from "@stellar/stellar-sdk"
 import { networkPassphrase, rpcUrl } from "@stellar-scaffold/app-lib"
 
 // ---------- Testnet configuration ----------
@@ -11,12 +23,17 @@ export const TOKEN_SYMBOL = "XLM"
 export const DECIMALS = 7
 /** RentalDeposit wasm already uploaded to testnet: new agreements are instances of it. */
 export const WASM_HASH =
-	"3fe719f9999df0c91e4c449650c0fc792f5575fcb72f3b789f2fa69ee031d509"
+	"12a84cd129de71135854a746df7d7d7b9143031f389fb81c6176942e5375e680"
+/** Neutral arbiter for disputes (the platform). Demo: the `alice` CLI identity. */
+export const PLATFORM_ARBITER =
+	"GAKGQO3VCSGAVWNYI2KLT2MU2MDEHD2EHU4QASOOFRZPP7HFVCMAALJJ"
+/** unwind() opens this many seconds before the lease ends (same as the contract). */
+export const UNWIND_WINDOW_SECS = 30 * 86_400
 /** Same cap the contract enforces on-chain. */
 export const MAX_INVEST_BPS = 8000
 /** Default instance (overridden by ?id=C... in the URL). */
 export const DEFAULT_CONTRACT =
-	"CDNGPDZUBJRZV4LK3KPAGYY2DYKLOFMGPM7WJFEMM6IZ6SC6EA2SAUND"
+	"CDHLU2JWJXOQJTU73ETKEJNSZVLWPQ47XRCHRDEGGIREE7D2KMUXJXTH"
 
 export const explorerTx = (hash: string) =>
 	`https://stellar.expert/explorer/testnet/tx/${hash}`
@@ -89,13 +106,19 @@ export type StateName = "Funded" | "DeductionProposed" | "Disputed" | "Closed"
 export interface Deposit {
 	tenant: string
 	landlord: string
+	arbiter: string
 	token: string
 	pool: string
 	amount: bigint
 	invest_bps: number
 	invested: bigint
+	in_blend: boolean
+	lease_end: number // unix seconds
 	deduction: bigint
 	evidence: string
+	proposed_at: number
+	paid_landlord: bigint
+	paid_tenant: bigint
 	state: StateName
 }
 
@@ -111,6 +134,11 @@ export const getDeposit = async (contractId: string): Promise<Deposit | null> =>
 			amount: BigInt(d.amount as bigint),
 			invested: BigInt(d.invested as bigint),
 			deduction: BigInt(d.deduction as bigint),
+			paid_landlord: BigInt(d.paid_landlord as bigint),
+			paid_tenant: BigInt(d.paid_tenant as bigint),
+			lease_end: Number(d.lease_end),
+			proposed_at: Number(d.proposed_at),
+			in_blend: Boolean(d.in_blend),
 			invest_bps: Number(d.invest_bps),
 			state: stateName(d.state),
 		}
@@ -169,4 +197,124 @@ export const getPosition = async (
 		value: (bTokens * bRate) / scale,
 		bRate: Number(bRate) / Number(scale),
 	}
+}
+
+
+// ---------- Sending transactions (with fee bump when needed) ----------
+
+
+const UINT32_MAX = 4_294_967_295n
+const server = new rpc.Server(rpcUrl)
+
+/** Wallet signer, e.g. Freighter through Stellar Wallets Kit. */
+export type Signer = (
+	xdr: string,
+	opts: { networkPassphrase: string; address: string },
+) => Promise<{ signedTxXdr: string }>
+
+const submit = async (tx: Transaction | ReturnType<typeof TransactionBuilder.fromXDR>) => {
+	const res = await server.sendTransaction(tx)
+	if (res.status === "ERROR") {
+		throw new Error(`Transaction rejected: ${res.errorResult?.result().switch().name ?? "error"}`)
+	}
+	for (let i = 0; i < 30; i++) {
+		const got = await server.getTransaction(res.hash)
+		if (got.status === rpc.Api.GetTransactionStatus.SUCCESS) return res.hash
+		if (got.status === rpc.Api.GetTransactionStatus.FAILED) {
+			throw new Error(`Transaction failed on-chain (${res.hash.slice(0, 8)}…)`)
+		}
+		await new Promise((r) => setTimeout(r, 1500))
+	}
+	throw new Error("Timed out waiting for the transaction")
+}
+
+/**
+ * Simulate, sign with the wallet and submit a contract call; returns the tx hash.
+ * A normal transaction's fee field is a u32 (max ≈ 429 XLM). When testnet's
+ * resource fees exceed that, wrap the call in a fee-bump transaction (as the
+ * stellar CLI does): the wallet signs twice.
+ */
+export const invoke = async (
+	contractId: string,
+	method: string,
+	args: Record<string, unknown> | undefined,
+	source: string,
+	sign: Signer,
+): Promise<string> => {
+	const client = await getClient(contractId)
+	const op = new Contract(contractId).call(
+		method,
+		...client.spec.funcArgsToScVals(method, args ?? {}),
+	)
+	const acc = await server.getAccount(source)
+	const seq = acc.sequenceNumber()
+	const raw = new TransactionBuilder(new Account(source, seq), {
+		fee: BASE_FEE,
+		networkPassphrase,
+	})
+		.addOperation(op)
+		.setTimeout(300)
+		.build()
+
+	const sim = await server.simulateTransaction(raw)
+	if (rpc.Api.isSimulationError(sim)) {
+		throw new Error(`Simulation failed: ${sim.error.split("\n")[0]}`)
+	}
+	const data = sim.transactionData.build()
+	const resourceFee = data.resourceFee().toBigInt()
+	const opts = { networkPassphrase, address: source }
+
+	if (resourceFee + BigInt(BASE_FEE) <= UINT32_MAX) {
+		const tx = rpc.assembleTransaction(raw, sim).build()
+		const { signedTxXdr } = await sign(tx.toXDR(), opts)
+		return submit(TransactionBuilder.fromXDR(signedTxXdr, networkPassphrase))
+	}
+
+	// ---- fee-bump path ----
+	const auth = sim.result?.auth ?? []
+	const func = op.body().invokeHostFunctionOp().hostFunction()
+	const zero = xdr.SorobanTransactionData.fromXDR(data.toXDR())
+	zero.resourceFee(xdr.Int64.fromString("0"))
+	const draft = new TransactionBuilder(new Account(source, seq), {
+		fee: BASE_FEE,
+		networkPassphrase,
+	})
+		.setSorobanData(zero)
+		.addOperation(Operation.invokeHostFunction({ func, auth }))
+		.setTimeout(300)
+		.build()
+	const env = draft.toEnvelope()
+	env.v1().tx().ext().sorobanData().resourceFee(xdr.Int64.fromString(resourceFee.toString()))
+	env.v1().tx().fee(Number(UINT32_MAX)) // the outer fee bump pays the real fee
+	const inner = new Transaction(env, networkPassphrase)
+
+	const signedInner = await sign(inner.toXDR(), opts)
+	const innerTx = new Transaction(signedInner.signedTxXdr, networkPassphrase)
+	const bump = TransactionBuilder.buildFeeBumpTransaction(
+		source,
+		BASE_FEE,
+		innerTx,
+		networkPassphrase,
+	)
+	const signedBump = await sign(bump.toXDR(), opts)
+	return submit(TransactionBuilder.fromXDR(signedBump.signedTxXdr, networkPassphrase))
+}
+
+/**
+ * Token balance held by an address/contract (the liquid part of the deposit).
+ * Simulates `balance(id)` on the token directly, without building a token client.
+ */
+export const getBalance = async (holder: string, asset = TOKEN): Promise<bigint> => {
+	const op = new Contract(asset).call("balance", new Address(holder).toScVal())
+	// Any funded account works as the simulation source; read-only, never sent
+	const acc = new Account(PLATFORM_ARBITER, "0")
+	const tx = new TransactionBuilder(acc, { fee: BASE_FEE, networkPassphrase })
+		.addOperation(op)
+		.setTimeout(60)
+		.build()
+	const sim = await server.simulateTransaction(tx)
+	if (rpc.Api.isSimulationError(sim) || !sim.result) {
+		throw new Error("balance simulation failed")
+	}
+	return BigInt(scValToNative(sim.result.retval) as bigint)
 }

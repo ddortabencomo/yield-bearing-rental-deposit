@@ -5,19 +5,23 @@ import { useSearchParams } from "react-router-dom"
 import { useWallet } from "../hooks/useWallet"
 import {
 	BLEND_POOL,
-	build,
 	DEFAULT_CONTRACT,
 	type Deposit,
 	explorerContract,
 	explorerTx,
 	fromUnits,
+	getBalance,
 	getDeposit,
 	getPosition,
+	invoke,
+	type Signer,
 	MAX_INVEST_BPS,
+	PLATFORM_ARBITER,
 	type Position,
 	toUnits,
 	TOKEN,
 	TOKEN_SYMBOL,
+	UNWIND_WINDOW_SECS,
 	WASM_HASH,
 } from "../lib/rental"
 import styles from "./RentalDeposit.module.css"
@@ -46,6 +50,7 @@ export const RentalDeposit = () => {
 
 	const [deposit, setDeposit] = useState<Deposit | null>(null)
 	const [position, setPosition] = useState<Position | null>(null)
+	const [liquid, setLiquid] = useState<bigint>(0n)
 	const [loading, setLoading] = useState(true)
 	const [busy, setBusy] = useState<string>()
 	const [error, setError] = useState<string>()
@@ -55,13 +60,30 @@ export const RentalDeposit = () => {
 	const [landlord, setLandlord] = useState("")
 	const [amount, setAmount] = useState("100")
 	const [investPct, setInvestPct] = useState(70)
+	const [leaseDays, setLeaseDays] = useState("7")
 	const [deduction, setDeduction] = useState("12")
 	const [evidence, setEvidence] = useState("ipfs://inspection-photos")
 
 	const refresh = useCallback(async () => {
 		const d = await getDeposit(contractId)
 		setDeposit(d)
-		if (d && d.invested > 0n && d.state !== "Closed") {
+		if (d && d.state !== "Closed") {
+			if (d.in_blend) {
+				// While invested, the contract holds exactly the buffer (enforced on-chain)
+				setLiquid(d.amount - d.invested)
+			} else {
+				// After unwind (or 0% invested) everything, yield included, is in the contract
+				let bal = d.amount - d.invested
+				try {
+					const b = await getBalance(contractId, d.token)
+					if (b > 0n) bal = b
+				} catch (e) {
+					console.error("balance:", e)
+				}
+				setLiquid(bal)
+			}
+		}
+		if (d && d.in_blend) {
 			try {
 				setPosition(await getPosition(contractId, d.pool, d.token))
 			} catch (e) {
@@ -82,15 +104,27 @@ export const RentalDeposit = () => {
 
 	// Live yield: re-read the Blend position every 8 s while funds are invested
 	useEffect(() => {
-		if (!deposit || deposit.invested === 0n || deposit.state === "Closed") return
+		if (!deposit || !deposit.in_blend) return
 		const t = setInterval(() => void refresh(), 8000)
 		return () => clearInterval(t)
 	}, [deposit, refresh])
 
+	/** Describe a contract call (sent by `run`). */
+	const build = (
+		id: string,
+		method: string,
+		args?: Record<string, unknown>,
+		_opts?: unknown,
+	) => Promise.resolve({ id, method, args })
+
 	/** Sign with the connected wallet, submit, then refresh. */
 	const run = async (
 		label: string,
-		make: () => Promise<contract.AssembledTransaction<unknown>>,
+		make: () => Promise<{
+			id: string
+			method: string
+			args?: Record<string, unknown>
+		}>,
 	) => {
 		if (!address) {
 			setError("Connect your wallet first.")
@@ -99,9 +133,15 @@ export const RentalDeposit = () => {
 		setBusy(label)
 		setError(undefined)
 		try {
-			const tx = await make()
-			const sent = await tx.signAndSend({ signTransaction })
-			setLastTx({ label, hash: sent.sendTransactionResponse?.hash })
+			const c = await make()
+			const hash = await invoke(
+				c.id,
+				c.method,
+				c.args,
+				address,
+				signTransaction as unknown as Signer,
+			)
+			setLastTx({ label, hash })
 			await refresh()
 			await updateBalances()
 		} catch (e) {
@@ -152,13 +192,26 @@ export const RentalDeposit = () => {
 					: "Viewer"
 			: undefined
 
-	const buffer = deposit ? deposit.amount - deposit.invested : 0n
-	const investedValue = position?.value ?? deposit?.invested ?? 0n
-	const accrued =
-		deposit && position && position.value > deposit.invested
-			? position.value - deposit.invested
-			: 0n
+	// liquid = what the contract holds right now; investedValue = live Blend position
+	const buffer = liquid
+	const investedValue = deposit?.in_blend
+		? (position?.value ?? deposit.invested)
+		: 0n
 	const totalNow = buffer + investedValue
+	const accrued =
+		deposit && deposit.state !== "Closed"
+			? totalNow > deposit.amount
+				? totalNow - deposit.amount
+				: 0n
+			: deposit
+				? deposit.paid_landlord + deposit.paid_tenant - deposit.amount
+				: 0n
+	const now = Math.floor(Date.now() / 1000)
+	const canUnwind =
+		!!deposit &&
+		deposit.in_blend &&
+		deposit.state !== "Closed" &&
+		now + UNWIND_WINDOW_SECS >= deposit.lease_end
 	const toLandlord = deposit
 		? deposit.deduction < totalNow
 			? deposit.deduction
@@ -237,6 +290,15 @@ export const RentalDeposit = () => {
 						/>
 					</label>
 					<label className={styles.field}>
+						Lease ends in (days)
+						<input
+							type="number"
+							min="1"
+							value={leaseDays}
+							onChange={(e) => setLeaseDays(e.target.value)}
+						/>
+					</label>
+					<label className={styles.field}>
 						Invested in Blend: <strong>{investPct}%</strong>
 						<input
 							type="range"
@@ -266,10 +328,15 @@ export const RentalDeposit = () => {
 									{
 										tenant: address,
 										landlord,
+										arbiter: PLATFORM_ARBITER,
 										token: TOKEN,
 										pool: BLEND_POOL,
 										amount: fundUnits,
 										invest_bps: investPct * 100,
+										lease_end: BigInt(
+											Math.floor(Date.now() / 1000) +
+												Math.max(1, Number(leaseDays) || 1) * 86_400,
+										),
 									},
 									{ publicKey: address },
 								),
@@ -301,7 +368,11 @@ export const RentalDeposit = () => {
 								{fromUnits(investedValue)} {TOKEN_SYMBOL}
 							</strong>
 							<span className={styles.muted}>
-								{deposit.invest_bps / 100}% invested
+								{deposit.in_blend
+									? `${deposit.invest_bps / 100}% invested`
+									: deposit.invested > 0n
+										? "withdrawn from Blend"
+										: "not invested"}
 								{position ? ` · ${position.bTokens.toLocaleString()} bTokens` : ""}
 							</span>
 						</div>
@@ -310,17 +381,21 @@ export const RentalDeposit = () => {
 							<strong>
 								{fromUnits(buffer)} {TOKEN_SYMBOL}
 							</strong>
-							<span className={styles.muted}>pays deductions instantly</span>
+							<span className={styles.muted}>
+								held in the contract · pays deductions instantly
+							</span>
 						</div>
 						<div className={`${styles.tile} ${styles.yieldTile}`}>
 							<span className={styles.label}>Yield accrued</span>
 							<strong>
-								{deposit.state === "Closed"
-									? "—"
-									: `+${fromUnits(accrued, 7)} ${TOKEN_SYMBOL}`}
+								+{fromUnits(accrued, 7)} {TOKEN_SYMBOL}
 							</strong>
 							<span className={styles.muted}>
-								{deposit.state === "Closed" ? "paid to tenant" : "live from Blend · updates every 8 s"}
+								{deposit.state === "Closed"
+									? "paid to tenant"
+									: deposit.in_blend
+										? "live from Blend · updates every 8 s"
+										: "withdrawn, waiting for settlement"}
 							</span>
 						</div>
 					</div>
@@ -450,8 +525,8 @@ export const RentalDeposit = () => {
 						<div className={`card ${styles.warn}`}>
 							<h2>Disputed: payout frozen</h2>
 							<p>
-								Funds stay in the contract (and keep earning in Blend) until an
-								arbiter resolves the dispute.
+								Funds stay in the contract (and keep earning in Blend) until the
+								arbiter ({short(deposit.arbiter)}) resolves the dispute.
 							</p>
 						</div>
 					)}
@@ -459,14 +534,44 @@ export const RentalDeposit = () => {
 					{deposit.state === "Closed" && (
 						<div className={`card ${styles.ok}`}>
 							<h2>Settled</h2>
-							<p>
-								The landlord received {fromUnits(deposit.deduction)}{" "}
-								{TOKEN_SYMBOL}; the tenant received the rest of the deposit plus
-								all the yield earned in Blend.
-							</p>
+							<div className={styles.waterfall}>
+								<div>
+									<span className={styles.wfNum}>1</span> Landlord received
+									<strong>
+										{fromUnits(deposit.paid_landlord, 7)} {TOKEN_SYMBOL}
+									</strong>
+								</div>
+								<div>
+									<span className={styles.wfNum}>2</span> Tenant received
+									(including +{fromUnits(accrued, 7)} yield)
+									<strong>
+										{fromUnits(deposit.paid_tenant, 7)} {TOKEN_SYMBOL}
+									</strong>
+								</div>
+							</div>
 						</div>
 					)}
 				</>
+			)}
+
+			{canUnwind && (
+				<div className="card">
+					<h3 className={styles.h3}>Lease ends soon: move funds out of Blend</h3>
+					<p className={styles.muted}>
+						In the last 30 days anyone can unwind, so settlement never depends on
+						the pool&apos;s liquidity that day.
+					</p>
+					<button
+						disabled={!!busy}
+						onClick={() =>
+							void run("Unwound", () =>
+								build(contractId, "unwind", undefined, { publicKey: address }),
+							)
+						}
+					>
+						Unwind from Blend
+					</button>
+				</div>
 			)}
 
 			{busy && <p className={styles.muted}>{busy}: confirm in your wallet…</p>}
