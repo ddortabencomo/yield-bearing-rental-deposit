@@ -17,9 +17,17 @@ import { networkPassphrase, rpcUrl } from "@stellar-scaffold/app-lib"
 
 /** Blend v2 testnet pool (TestnetV2, from blend-capital/blend-utils testnet.contracts.json). */
 export const BLEND_POOL = "CCEBVDYM32YNYCVNRXQKDFFPISJJCV557CDZEIRBEE4NCV4KHPQ44HGF"
-/** Asset the deposit is held in. XLM for now; Blend's testnet USDC is CAQCFVLOBK5GIULPNZRGATJJMIZL5BSP7X5YJVMGCPTUEPFM4AVSRCJU */
-export const TOKEN = "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC"
-export const TOKEN_SYMBOL = "XLM"
+/** Assets the deposit can be held in (Blend v2 testnet reserves). */
+export const ASSETS = {
+	USDC: "CAQCFVLOBK5GIULPNZRGATJJMIZL5BSP7X5YJVMGCPTUEPFM4AVSRCJU", // Blend testnet USDC (needs a trustline)
+	XLM: "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC",
+} as const
+/** Switch the whole app between USDC and XLM here. */
+export const TOKEN_SYMBOL: keyof typeof ASSETS = "USDC"
+export const TOKEN = ASSETS[TOKEN_SYMBOL]
+/** Symbol for a token address (deposits keep the token they were funded with). */
+export const symbolOf = (token: string) =>
+	(Object.entries(ASSETS).find(([, id]) => id === token)?.[0] ?? "tokens") as string
 export const DECIMALS = 7
 /** RentalDeposit wasm already uploaded to testnet: new agreements are instances of it. */
 export const WASM_HASH =

@@ -21,6 +21,7 @@ import {
 	toUnits,
 	TOKEN,
 	TOKEN_SYMBOL,
+	symbolOf,
 	UNWIND_WINDOW_SECS,
 	WASM_HASH,
 } from "../lib/rental"
@@ -230,6 +231,7 @@ export const RentalDeposit = () => {
 	const fundInvested = (fundUnits * BigInt(investPct * 100)) / 10000n
 
 	const current = stepIndex(deposit)
+	const sym = deposit ? symbolOf(deposit.token) : TOKEN_SYMBOL
 
 	return (
 		<div className={styles.wrap}>
@@ -282,7 +284,7 @@ export const RentalDeposit = () => {
 						/>
 					</label>
 					<label className={styles.field}>
-						Deposit ({TOKEN_SYMBOL})
+						Deposit ({sym})
 						<input
 							type="number"
 							min="0"
@@ -322,8 +324,16 @@ export const RentalDeposit = () => {
 						className={styles.primary}
 						disabled={!!busy || !address || !landlord || fundUnits <= 0n}
 						onClick={() =>
-							void run("Deposit locked", () =>
-								build(
+							void run("Deposit locked", async () => {
+								// The landlord must be able to receive the token, or settlement would fail
+								try {
+									await getBalance(landlord, TOKEN)
+								} catch {
+									throw new Error(
+										`The landlord's wallet can't receive ${sym} yet (no trustline). Ask them to add ${sym} first.`,
+									)
+								}
+								return build(
 									contractId,
 									"fund",
 									{
@@ -340,8 +350,8 @@ export const RentalDeposit = () => {
 										),
 									},
 									{ publicKey: address },
-								),
-							)
+								)
+							})
 						}
 					>
 						{busy === "Deposit locked" ? "Signing…" : "Lock deposit"}
@@ -357,7 +367,7 @@ export const RentalDeposit = () => {
 						<div className={styles.tile}>
 							<span className={styles.label}>Deposit</span>
 							<strong>
-								{fromUnits(deposit.amount)} {TOKEN_SYMBOL}
+								{fromUnits(deposit.amount)} {sym}
 							</strong>
 							<span className={styles.muted}>
 								{short(deposit.tenant)} → {short(deposit.landlord)}
@@ -366,7 +376,7 @@ export const RentalDeposit = () => {
 						<div className={styles.tile}>
 							<span className={styles.label}>In Blend</span>
 							<strong>
-								{fromUnits(investedValue)} {TOKEN_SYMBOL}
+								{fromUnits(investedValue)} {sym}
 							</strong>
 							<span className={styles.muted}>
 								{deposit.in_blend
@@ -380,7 +390,7 @@ export const RentalDeposit = () => {
 						<div className={styles.tile}>
 							<span className={styles.label}>Liquid buffer</span>
 							<strong>
-								{fromUnits(buffer)} {TOKEN_SYMBOL}
+								{fromUnits(buffer)} {sym}
 							</strong>
 							<span className={styles.muted}>
 								{deposit.state === "Closed"
@@ -391,7 +401,7 @@ export const RentalDeposit = () => {
 						<div className={`${styles.tile} ${styles.yieldTile}`}>
 							<span className={styles.label}>Yield accrued</span>
 							<strong>
-								+{fromUnits(accrued, 7)} {TOKEN_SYMBOL}
+								+{fromUnits(accrued, 7)} {sym}
 							</strong>
 							<span className={styles.muted}>
 								{deposit.state === "Closed"
@@ -411,14 +421,14 @@ export const RentalDeposit = () => {
 								<div>
 									<span className={styles.wfNum}>1</span> Landlord deduction
 									<strong>
-										{fromUnits(toLandlord, 7)} {TOKEN_SYMBOL}
+										{fromUnits(toLandlord, 7)} {sym}
 									</strong>
 								</div>
 								<div>
 									<span className={styles.wfNum}>2</span> Tenant: deposit −
 									deduction + all yield
 									<strong>
-										{fromUnits(toTenant, 7)} {TOKEN_SYMBOL}
+										{fromUnits(toTenant, 7)} {sym}
 									</strong>
 								</div>
 							</div>
@@ -442,7 +452,7 @@ export const RentalDeposit = () => {
 							) : (
 								<>
 									<label className={styles.field}>
-										Deduction ({TOKEN_SYMBOL}, max {fromUnits(deposit.amount)})
+										Deduction ({sym}, max {fromUnits(deposit.amount)})
 										<input
 											type="number"
 											min="0"
@@ -481,7 +491,7 @@ export const RentalDeposit = () => {
 					{deposit.state === "DeductionProposed" && (
 						<div className="card">
 							<h2>
-								Landlord proposes {fromUnits(deposit.deduction)} {TOKEN_SYMBOL}
+								Landlord proposes {fromUnits(deposit.deduction)} {sym}
 							</h2>
 							{role !== "Tenant" ? (
 								<p className={styles.muted}>
@@ -528,8 +538,10 @@ export const RentalDeposit = () => {
 						<div className={`card ${styles.warn}`}>
 							<h2>Disputed: payout frozen</h2>
 							<p>
-								Funds stay in the contract (and keep earning in Blend) until the
-								arbiter ({short(deposit.arbiter)}) resolves the dispute.
+								Funds stay locked in the contract
+								{deposit.in_blend ? " (and keep earning in Blend)" : ""} until the
+								neutral arbiter ({short(deposit.arbiter)}) resolves the dispute. The
+								arbiter can never award more than the landlord asked.
 							</p>
 						</div>
 					)}
@@ -541,14 +553,14 @@ export const RentalDeposit = () => {
 								<div>
 									<span className={styles.wfNum}>1</span> Landlord received
 									<strong>
-										{fromUnits(deposit.paid_landlord, 7)} {TOKEN_SYMBOL}
+										{fromUnits(deposit.paid_landlord, 7)} {sym}
 									</strong>
 								</div>
 								<div>
 									<span className={styles.wfNum}>2</span> Tenant received
 									(including +{fromUnits(accrued, 7)} yield)
 									<strong>
-										{fromUnits(deposit.paid_tenant, 7)} {TOKEN_SYMBOL}
+										{fromUnits(deposit.paid_tenant, 7)} {sym}
 									</strong>
 								</div>
 							</div>
