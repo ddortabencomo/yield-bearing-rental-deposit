@@ -9,6 +9,6 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.49.0",
-    "@stellar/stellar-sdk": "^16.4.1"
+    "@stellar/stellar-sdk": "^17.2.1"
   }
 }
