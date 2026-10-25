@@ -1,0 +1,14 @@
+{
+  "name": "@stellar-scaffold/ui-e2e",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Playwright e2e UI tests",
+  "scripts": {
+    "test": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.0",
+    "@stellar/stellar-sdk": "^16.4.1"
+  }
+}
