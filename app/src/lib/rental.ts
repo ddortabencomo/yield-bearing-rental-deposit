@@ -17,6 +17,11 @@ import { networkPassphrase, rpcUrl } from "@stellar-scaffold/app-lib"
 
 /** Blend v2 testnet pool (TestnetV2, from blend-capital/blend-utils testnet.contracts.json). */
 export const BLEND_POOL = "CCEBVDYM32YNYCVNRXQKDFFPISJJCV557CDZEIRBEE4NCV4KHPQ44HGF"
+/** "Blendlord Deposit Reserve": our own DeFindex vault, created with the DeFindex factory.
+ * Shared by all agreements. Its Rebalance Manager (quant/rebalance.py) moves funds between
+ * idle liquidity and the DeFindex Blend USDC strategy based on Blend utilization and
+ * upcoming move-outs. */
+export const DEFINDEX_VAULT = "CDULNJ6EKQJJRPPZIGZ3R4T2W3DVTDFQTAMX3RBVV3RII5JJAXZQRDED"
 /** Assets the deposit can be held in (Blend v2 testnet reserves). */
 export const ASSETS = {
 	USDC: "CAQCFVLOBK5GIULPNZRGATJJMIZL5BSP7X5YJVMGCPTUEPFM4AVSRCJU", // Blend testnet USDC (needs a trustline)
@@ -31,7 +36,7 @@ export const symbolOf = (token: string) =>
 export const DECIMALS = 7
 /** RentalDeposit wasm already uploaded to testnet: new agreements are instances of it. */
 export const WASM_HASH =
-	"0853eb87a72d829e78502c214874919c4af18c3b0dfbab2a71a7e26323c94537"
+	"5db515d9744f71166cd313d7f1c8de59a5495abeb2c3e9bcbdec1acc75d7e2ec"
 /** Neutral arbiter for disputes (the platform). Demo: the `alice` CLI identity. */
 export const PLATFORM_ARBITER =
 	"GAKGQO3VCSGAVWNYI2KLT2MU2MDEHD2EHU4QASOOFRZPP7HFVCMAALJJ"
@@ -123,10 +128,13 @@ export interface Deposit {
 	arbiter: string
 	token: string
 	pool: string
+	vault: string
 	amount: bigint
 	invest_bps: number
+	defindex_bps: number
 	invested: bigint
 	in_blend: boolean
+	in_vault: boolean
 	lease_end: number // unix seconds
 	deduction: bigint
 	evidence: string
@@ -155,6 +163,8 @@ export const getDeposit = async (contractId: string): Promise<Deposit | null> =>
 			lease_end: Number(d.lease_end),
 			proposed_at: Number(d.proposed_at),
 			in_blend: Boolean(d.in_blend),
+			in_vault: Boolean(d.in_vault),
+			defindex_bps: Number(d.defindex_bps ?? 0),
 			invest_bps: Number(d.invest_bps),
 			state: stateName(d.state),
 		}
@@ -404,4 +414,38 @@ export const getSupplyRates = async (pool = BLEND_POOL, asset = TOKEN): Promise<
 	else borrowApr = irMod * (rBase + rOne + rTwo) + ((u - 0.95) / 0.05) * rThree
 	const supplyApr = borrowApr * u * (1 - f7(config.bstop_rate))
 	return { utilization: u, borrowApr, supplyApr }
+}
+
+/** Our DeFindex position: vault shares held by `holder` and what they are worth now. */
+export const getVaultPosition = async (
+	holder: string,
+	vault = DEFINDEX_VAULT,
+): Promise<{ shares: bigint; value: bigint }> => {
+	const shares = BigInt(await read<bigint>(vault, "balance", { id: holder }))
+	if (shares <= 0n) return { shares, value: 0n }
+	const amounts = await read<unknown>(vault, "get_asset_amounts_per_shares", {
+		vault_shares: shares,
+	})
+	// Returns Result<Vec<i128>>: the bindings unwrap it to the Vec (or an Ok wrapper)
+	const list = (
+		Array.isArray(amounts)
+			? amounts
+			: ((amounts as { value?: unknown[] })?.value ?? [])
+	) as bigint[]
+	return { shares, value: BigInt(list[0] ?? 0) }
+}
+
+/** State of the shared DeFindex reserve: how much is idle vs invested in Blend. */
+export const getReserveState = async (
+	vault = DEFINDEX_VAULT,
+): Promise<{ idle: bigint; invested: bigint }> => {
+	const funds = await read<unknown>(vault, "fetch_total_managed_funds")
+	const list = (
+		Array.isArray(funds) ? funds : ((funds as { value?: unknown[] })?.value ?? [])
+	) as { idle_amount: bigint; invested_amount: bigint }[]
+	const a = list[0]
+	return {
+		idle: BigInt(a?.idle_amount ?? 0),
+		invested: BigInt(a?.invested_amount ?? 0),
+	}
 }

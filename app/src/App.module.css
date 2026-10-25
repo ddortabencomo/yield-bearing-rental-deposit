@@ -5,70 +5,89 @@
 }
 
 .header {
+	position: sticky;
+	top: 0;
+	z-index: 10;
 	display: flex;
+	flex-wrap: wrap;
 	align-items: center;
-	gap: 2rem;
-	padding: 1rem 3rem;
-	border-bottom: 1px solid var(--color-border);
+	gap: 16px 32px;
+	padding: 14px 32px;
+	background: #0f0f0f;
+	color: #fff;
 }
 
 .logo {
-	font-weight: 600;
-	font-size: 1.1rem;
-	color: var(--color-text);
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	color: #fff;
 	text-decoration: none;
-	white-space: nowrap;
+}
+
+.logo span {
+	font-size: 22px;
+	font-weight: 900;
+	font-stretch: 120%;
+	letter-spacing: -0.02em;
+}
+
+.logo:hover {
+	color: #fff;
 }
 
 .headerNav {
 	display: flex;
-	gap: 0.5rem;
+	flex-wrap: wrap;
+	gap: 22px;
 	flex: 1;
 }
 
 .headerNav a {
-	color: var(--color-text-muted);
+	color: #bdbdbd;
 	text-decoration: none;
-	padding: 0.25rem 0.5rem;
-	border-radius: var(--radius);
-	font-size: 0.9rem;
+	font-weight: 700;
+	font-size: 15px;
 }
 
 .headerNav a:hover {
-	color: var(--color-text);
-	background: var(--color-surface);
+	color: #fdda24;
 }
 
-.headerNav a.active {
-	color: var(--color-text);
-	font-weight: 500;
+/* Wallet controls from app-lib sit on the dark header */
+.header :global(.wallet-balance) {
+	color: #bdbdbd;
+}
+
+.header :global(button) {
+	border-radius: 999px;
+	border: 0;
+	background: #fdda24;
+	color: #0f0f0f;
+	font-weight: 800;
+	padding: 8px 18px;
 }
 
 .main {
 	flex: 1;
-	padding: 2rem 3rem;
-	max-width: 1200px;
-	margin: 0 auto;
 	width: 100%;
 }
 
 .footer {
-	border-top: 1px solid var(--color-border);
-	padding: 1rem 3rem;
-}
-
-.footerNav {
 	display: flex;
-	gap: 1.5rem;
-	justify-content: flex-end;
+	flex-wrap: wrap;
+	justify-content: space-between;
+	align-items: center;
+	gap: 16px;
+	padding: 32px;
+	color: #555;
+	font-size: 15px;
+	border-top: 1px solid #d6d6d6;
 }
 
-.footerNav a {
-	color: var(--color-text-muted);
-	text-decoration: none;
-	font-size: 0.875rem;
-}
-
-.footerNav a:hover {
-	color: var(--color-text);
+.brand {
+	font-size: 22px;
+	font-weight: 900;
+	font-stretch: 120%;
+	color: #0f0f0f;
 }

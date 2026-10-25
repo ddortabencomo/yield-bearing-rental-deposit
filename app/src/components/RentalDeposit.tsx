@@ -6,6 +6,9 @@ import { QuantPanel } from "./QuantPanel"
 import {
 	BLEND_POOL,
 	createAgreement,
+	DEFINDEX_VAULT,
+	getVaultPosition,
+	getReserveState,
 	DEFAULT_CONTRACT,
 	type Deposit,
 	explorerContract,
@@ -56,6 +59,8 @@ export const RentalDeposit = () => {
 
 	const [deposit, setDeposit] = useState<Deposit | null>(null)
 	const [position, setPosition] = useState<Position | null>(null)
+	const [vaultPos, setVaultPos] = useState<{ shares: bigint; value: bigint } | null>(null)
+	const [reserve, setReserve] = useState<{ idle: bigint; invested: bigint } | null>(null)
 	const [liquid, setLiquid] = useState<bigint>(0n)
 	const [loading, setLoading] = useState(true)
 	const [busy, setBusy] = useState<string>()
@@ -65,7 +70,10 @@ export const RentalDeposit = () => {
 	// form state
 	const [tenant, setTenant] = useState("")
 	const [amount, setAmount] = useState("100")
-	const [investPct, setInvestPct] = useState(70)
+	const investPct = 70 // landlord's default only; the tenant picks the invested share when locking
+	const [tenantInvestPct, setTenantInvestPct] = useState(70)
+	const defindexPct = 50 // landlord's default only; the tenant picks the split when locking
+	const [tenantDfxPct, setTenantDfxPct] = useState(50)
 	const [leaseDays, setLeaseDays] = useState("7")
 	const [deduction, setDeduction] = useState("12")
 	const [evidence, setEvidence] = useState("ipfs://inspection-photos")
@@ -85,7 +93,7 @@ export const RentalDeposit = () => {
 			(d.state === "Funded" || d.state === "DeductionProposed" || d.state === "Disputed")
 		if (d && !active) setLiquid(0n) // not funded yet, or the buffer was already paid out
 		if (d && active) {
-			if (d.in_blend) {
+			if (d.in_blend || d.in_vault) {
 				// While invested, the contract holds exactly the buffer (enforced on-chain)
 				setLiquid(d.amount - d.invested)
 			} else {
@@ -109,6 +117,16 @@ export const RentalDeposit = () => {
 		} else {
 			setPosition(null)
 		}
+		if (d && d.in_vault) {
+			try {
+				setVaultPos(await getVaultPosition(contractId, d.vault))
+				setReserve(await getReserveState(d.vault))
+			} catch (e) {
+				console.error("vault position:", e)
+			}
+		} else {
+			setVaultPos(null)
+		}
 		setLoading(false)
 	}, [contractId])
 
@@ -121,7 +139,7 @@ export const RentalDeposit = () => {
 
 	// Live yield: re-read the Blend position every 8 s while funds are invested
 	useEffect(() => {
-		if (!deposit || !deposit.in_blend) return
+		if (!deposit || !(deposit.in_blend || deposit.in_vault)) return
 		const t = setInterval(() => void refresh(), 8000)
 		return () => clearInterval(t)
 	}, [deposit, refresh])
@@ -200,8 +218,10 @@ export const RentalDeposit = () => {
 					arbiter: PLATFORM_ARBITER,
 					token: TOKEN,
 					pool: BLEND_POOL,
+					vault: DEFINDEX_VAULT,
 					amount: fundUnits,
 					invest_bps: investPct * 100,
+					defindex_bps: defindexPct * 100,
 					lease_end: BigInt(
 						Math.floor(Date.now() / 1000) + Math.max(1, Number(leaseDays) || 1) * 86_400,
 					),
@@ -232,9 +252,14 @@ export const RentalDeposit = () => {
 
 	// liquid = what the contract holds right now; investedValue = live Blend position
 	const buffer = liquid
-	const investedValue = deposit?.in_blend
-		? (position?.value ?? deposit.invested)
+	const vaultInvested = deposit
+		? (deposit.invested * BigInt(deposit.defindex_bps)) / 10000n
 		: 0n
+	const blendValue = deposit?.in_blend
+		? (position?.value ?? deposit.invested - vaultInvested)
+		: 0n
+	const vaultValue = deposit?.in_vault ? (vaultPos?.value ?? vaultInvested) : 0n
+	const investedValue = blendValue + vaultValue
 	const totalNow = buffer + investedValue
 	const paidSoFar = deposit ? deposit.paid_landlord + deposit.paid_tenant : 0n
 	const grossNow = totalNow + paidSoFar // everything the deposit is worth, paid or not
@@ -251,7 +276,7 @@ export const RentalDeposit = () => {
 	const now = Math.floor(Date.now() / 1000)
 	const canUnwind =
 		!!deposit &&
-		deposit.in_blend &&
+		(deposit.in_blend || deposit.in_vault) &&
 		live &&
 		now + UNWIND_WINDOW_SECS >= deposit.lease_end
 	const toLandlord = deposit
@@ -268,12 +293,14 @@ export const RentalDeposit = () => {
 			return 0n
 		}
 	})()
-	const fundInvested = (fundUnits * BigInt(investPct * 100)) / 10000n
 
-	// The landlord picks the pool and token: only accept the official Blend pool and assets
+	// The landlord picks the pool, token and arbiter: only accept the official Blend pool,
+	// supported assets and the platform's arbiter (the contract can't judge who is neutral)
 	const trustedTerms =
 		!!deposit &&
 		deposit.pool === BLEND_POOL &&
+		deposit.vault === DEFINDEX_VAULT &&
+		deposit.arbiter === PLATFORM_ARBITER &&
 		(Object.values(ASSETS) as string[]).includes(deposit.token)
 	const current = stepIndex(deposit)
 	const sym = deposit ? symbolOf(deposit.token) : TOKEN_SYMBOL
@@ -351,32 +378,10 @@ export const RentalDeposit = () => {
 							onChange={(e) => setLeaseDays(e.target.value)}
 						/>
 					</label>
-					<label className={styles.field}>
-						Invested in Blend: <strong>{investPct}%</strong>
-						<input
-							type="range"
-							min={0}
-							max={MAX_INVEST_BPS / 100}
-							step={5}
-							value={investPct}
-							onChange={(e) => setInvestPct(Number(e.target.value))}
-						/>
-					</label>
-					<div className={styles.split}>
-						<div style={{ flex: Math.max(investPct, 1) }} className={styles.splitInvest}>
-							{fromUnits(fundInvested)} earning yield
-						</div>
-						<div style={{ flex: Math.max(100 - investPct, 1) }} className={styles.splitBuffer}>
-							{fromUnits(fundUnits - fundInvested)} liquid buffer
-						</div>
-					</div>
-					<QuantPanel
-						amount={fundUnits}
-						investPct={investPct}
-						onInvestPct={setInvestPct}
-						leaseDays={Number(leaseDays) || 1}
-						symbol={sym}
-					/>
+					<p className={styles.muted}>
+						Your tenant chooses how much of the deposit earns yield (never above 80%), so at
+						least 20% always stays liquid to pay your deduction on the spot.
+					</p>
 					<p className={styles.muted}>
 						Disputes are decided by a neutral arbiter ({short(PLATFORM_ARBITER)}).
 					</p>
@@ -414,7 +419,9 @@ export const RentalDeposit = () => {
 									Tenant<strong>{short(deposit.tenant)}</strong>
 								</div>
 								<div>
-									Invested in Blend<strong>{deposit.invest_bps / 100}%</strong>
+									Invested<strong>
+										{role === "Tenant" ? `${tenantInvestPct}% (your choice)` : "chosen by the tenant"}
+									</strong>
 								</div>
 								<div>
 									Lease ends
@@ -424,18 +431,58 @@ export const RentalDeposit = () => {
 									Neutral arbiter<strong>{short(deposit.arbiter)}</strong>
 								</div>
 							</div>
+							{role === "Tenant" && (
+								<label className={styles.field}>
+									Your choice: how much of your deposit earns yield:{" "}
+									<strong>{tenantInvestPct}%</strong>
+									<input
+										type="range"
+										min={0}
+										max={MAX_INVEST_BPS / 100}
+										step={5}
+										value={tenantInvestPct}
+										onChange={(e) => setTenantInvestPct(Number(e.target.value))}
+									/>
+									<span className={styles.muted}>
+										Never above 80%: at least 20% always stays liquid for the landlord&apos;s
+										deduction. Our risk model below recommends a share.
+									</span>
+								</label>
+							)}
 							<QuantPanel
 								amount={deposit.amount}
-								investPct={deposit.invest_bps / 100}
-								onInvestPct={() => {}}
+								investPct={role === "Tenant" ? tenantInvestPct : deposit.invest_bps / 100}
+								onInvestPct={setTenantInvestPct}
 								leaseDays={Math.max(1, Math.round((deposit.lease_end - now) / 86_400))}
 								symbol={sym}
-								readOnly
+								readOnly={role !== "Tenant"}
 							/>
+							{role === "Tenant" && (
+								<label className={styles.field}>
+									Your choice: where your invested part earns yield:{" "}
+									<strong>
+										{100 - tenantDfxPct}% Blend direct · {tenantDfxPct}% DeFindex reserve
+									</strong>
+									<input
+										type="range"
+										min={0}
+										max={100}
+										step={10}
+										value={tenantDfxPct}
+										onChange={(e) => setTenantDfxPct(Number(e.target.value))}
+									/>
+									<span className={styles.muted}>
+										The yield is yours, so this is your call. Blend direct: this agreement
+										holds its own position. DeFindex reserve: a shared vault whose exposure
+										to Blend our risk model adjusts to pool liquidity and upcoming move-outs.
+									</span>
+								</label>
+							)}
 							{!trustedTerms && (
 								<div className={`card ${styles.err}`} role="alert">
-									Warning: this agreement does not use the official Blend pool or a
-									supported token. Do not deposit.
+									Warning: this agreement does not use the official Blend pool, a
+									supported token or the platform&apos;s neutral arbiter. Do not
+									deposit.
 								</div>
 							)}
 							{role === "Tenant" ? (
@@ -449,8 +496,10 @@ export const RentalDeposit = () => {
 												arbiter: deposit.arbiter,
 												token: deposit.token,
 												pool: deposit.pool,
+												vault: deposit.vault,
 												amount: deposit.amount,
-												invest_bps: deposit.invest_bps,
+												invest_bps: tenantInvestPct * 100,
+												defindex_bps: tenantDfxPct * 100,
 												lease_end: BigInt(deposit.lease_end),
 											}),
 										)
@@ -497,17 +546,20 @@ export const RentalDeposit = () => {
 							</span>
 						</div>
 						<div className={styles.tile}>
-							<span className={styles.label}>In Blend</span>
+							<span className={styles.label}>Invested</span>
 							<strong>
 								{fromUnits(investedValue)} {sym}
 							</strong>
 							<span className={styles.muted}>
-								{deposit.in_blend
-									? `${deposit.invest_bps / 100}% invested`
+								{deposit.in_blend || deposit.in_vault
+									? `Blend ${fromUnits(blendValue)} · DeFindex ${fromUnits(vaultValue)}${
+											reserve && reserve.idle + reserve.invested > 0n
+												? ` (reserve ${Number((reserve.invested * 100n) / (reserve.idle + reserve.invested))}% in Blend, rest ready)`
+												: ""
+										}`
 									: deposit.invested > 0n
-										? "withdrawn from Blend"
+										? "withdrawn from Blend and DeFindex"
 										: "not invested"}
-								{position ? ` · ${position.bTokens.toLocaleString()} bTokens` : ""}
 							</span>
 						</div>
 						<div className={styles.tile}>
@@ -530,7 +582,7 @@ export const RentalDeposit = () => {
 								{deposit.state === "Closed"
 									? "paid to tenant"
 									: deposit.in_blend
-										? "live from Blend · updates every 8 s"
+										? "live from Blend & DeFindex · updates every 8 s"
 										: "withdrawn, waiting for settlement"}
 							</span>
 						</div>
@@ -732,7 +784,7 @@ export const RentalDeposit = () => {
 
 			{canUnwind && (
 				<div className="card">
-					<h3 className={styles.h3}>Lease ends soon: move funds out of Blend</h3>
+					<h3 className={styles.h3}>Lease ends soon: bring the money home</h3>
 					<p className={styles.muted}>
 						In the last 30 days anyone can unwind, so settlement never depends on
 						the pool&apos;s liquidity that day.
@@ -745,7 +797,7 @@ export const RentalDeposit = () => {
 							)
 						}
 					>
-						Unwind from Blend
+						Unwind from Blend & DeFindex
 					</button>
 				</div>
 			)}

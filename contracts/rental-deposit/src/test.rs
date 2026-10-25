@@ -58,16 +58,73 @@ impl MockPool {
     }
 }
 
+/// Fake DeFindex vault: `deposit` pulls the tokens from `from` (a nested transfer the caller
+/// must authorize), mints shares 1:1; `withdraw` burns shares and pays out everything it
+/// holds pro rata (so pre-minted tokens act as yield). Can be switched to "illiquid".
+#[contract]
+pub struct MockVault;
+
+#[contractimpl]
+impl MockVault {
+    pub fn init(env: Env, token: Address) {
+        env.storage().instance().set(&symbol_short!("token"), &token);
+    }
+
+    pub fn set_illiquid(env: Env, v: bool) {
+        env.storage().instance().set(&symbol_short!("illiq"), &v);
+    }
+
+    pub fn deposit(
+        env: Env,
+        amounts_desired: Vec<i128>,
+        _amounts_min: Vec<i128>,
+        from: Address,
+        _invest: bool,
+    ) -> (Vec<i128>, i128) {
+        from.require_auth();
+        let token: Address = env.storage().instance().get(&symbol_short!("token")).unwrap();
+        let amount = amounts_desired.get(0).unwrap();
+        TokenClient::new(&env, &token).transfer(&from, &env.current_contract_address(), &amount);
+        let bal: i128 = env.storage().persistent().get(&from).unwrap_or(0);
+        env.storage().persistent().set(&from, &(bal + amount));
+        let total: i128 = env.storage().instance().get(&symbol_short!("total")).unwrap_or(0);
+        env.storage().instance().set(&symbol_short!("total"), &(total + amount));
+        (amounts_desired, amount)
+    }
+
+    pub fn withdraw(env: Env, shares: i128, _min_out: Vec<i128>, from: Address) -> Vec<i128> {
+        from.require_auth();
+        let illiquid: bool = env.storage().instance().get(&symbol_short!("illiq")).unwrap_or(false);
+        assert!(!illiquid, "vault illiquid");
+        let token: Address = env.storage().instance().get(&symbol_short!("token")).unwrap();
+        let t = TokenClient::new(&env, &token);
+        let me = env.current_contract_address();
+        let total: i128 = env.storage().instance().get(&symbol_short!("total")).unwrap();
+        let out = t.balance(&me) * shares / total;
+        t.transfer(&me, &from, &out);
+        let bal: i128 = env.storage().persistent().get(&from).unwrap_or(0);
+        env.storage().persistent().set(&from, &(bal - shares));
+        env.storage().instance().set(&symbol_short!("total"), &(total - shares));
+        vec![&env, out]
+    }
+
+    pub fn balance(env: Env, id: Address) -> i128 {
+        env.storage().persistent().get(&id).unwrap_or(0)
+    }
+}
+
 struct Setup<'a> {
     env: Env,
     c: RentalDepositClient<'a>,
     t: TokenClient<'a>,
     pool: MockPoolClient<'a>,
+    vault: MockVaultClient<'a>,
     token: Address,
     tenant: Address,
     landlord: Address,
     arbiter: Address,
     bps: u32,
+    dfx: u32,
     end: u64,
 }
 
@@ -75,6 +132,7 @@ struct Parties {
     env: Env,
     token: Address,
     pool: Address,
+    vault: Address,
     tenant: Address,
     landlord: Address,
     arbiter: Address,
@@ -93,11 +151,19 @@ fn parties() -> Parties {
     sac.mint(&tenant, &DEPOSIT);
     let pool = env.register(MockPool, ());
     sac.mint(&pool, &(7 * USDC)); // simulated yield sitting in the pool
-    Parties { env, token, pool, tenant, landlord, arbiter }
+    let vault = env.register(MockVault, ());
+    MockVaultClient::new(&env, &vault).init(&token);
+    sac.mint(&vault, &(3 * USDC)); // simulated yield inside the DeFindex vault
+    Parties { env, token, pool, vault, tenant, landlord, arbiter }
 }
 
-/// Landlord creates the agreement (deploy + constructor).
+/// Landlord creates the agreement (deploy + constructor). Blend only.
 fn setup<'a>(bps: u32) -> Setup<'a> {
+    setup_split(bps, 0)
+}
+
+/// Same, routing `dfx` (bps) of the invested share to the DeFindex vault.
+fn setup_split<'a>(bps: u32, dfx: u32) -> Setup<'a> {
     let p = parties();
     let end = p.env.ledger().timestamp() + YEAR;
     let id = p.env.register(
@@ -108,31 +174,39 @@ fn setup<'a>(bps: u32) -> Setup<'a> {
             p.arbiter.clone(),
             p.token.clone(),
             p.pool.clone(),
+            p.vault.clone(),
             DEPOSIT,
             bps,
+            dfx,
             end,
         ),
     );
     let c = RentalDepositClient::new(&p.env, &id);
     let t = TokenClient::new(&p.env, &p.token);
     let pool = MockPoolClient::new(&p.env, &p.pool);
+    let vault = MockVaultClient::new(&p.env, &p.vault);
     Setup {
         env: p.env,
         c,
         t,
         pool,
+        vault,
         token: p.token,
         tenant: p.tenant,
         landlord: p.landlord,
         arbiter: p.arbiter,
         bps,
+        dfx,
         end,
     }
 }
 
 /// Tenant accepts the exact terms by depositing.
 fn fund(s: &Setup) {
-    s.c.fund(&s.landlord, &s.arbiter, &s.token, &s.pool.address, &DEPOSIT, &s.bps, &s.end);
+    s.c.fund(
+        &s.landlord, &s.arbiter, &s.token, &s.pool.address, &s.vault.address, &DEPOSIT, &s.bps, &s.dfx,
+        &s.end,
+    );
 }
 
 fn funded<'a>(bps: u32) -> Setup<'a> {
@@ -191,14 +265,17 @@ fn tenant_signature_commits_to_the_terms() {
     let s = setup(7_000);
     // Tenant believes the arbiter is someone else: funding must fail
     let other = Address::generate(&s.env);
-    s.c.fund(&s.landlord, &other, &s.token, &s.pool.address, &DEPOSIT, &s.bps, &s.end);
+    s.c.fund(&s.landlord, &other, &s.token, &s.pool.address, &s.vault.address, &DEPOSIT, &s.bps, &s.dfx, &s.end);
 }
 
 #[test]
 fn only_the_tenant_can_fund() {
     let s = setup(7_000);
     s.env.set_auths(&[]); // no signatures at all
-    let r = s.c.try_fund(&s.landlord, &s.arbiter, &s.token, &s.pool.address, &DEPOSIT, &s.bps, &s.end);
+    let r = s.c.try_fund(
+        &s.landlord, &s.arbiter, &s.token, &s.pool.address, &s.vault.address, &DEPOSIT, &s.bps, &s.dfx,
+        &s.end,
+    );
     assert!(r.is_err());
 }
 
@@ -239,7 +316,18 @@ fn cannot_fund_twice() {
 fn deploy_with(p: &Parties, tenant: &Address, arbiter: &Address, bps: u32, end: u64) {
     p.env.register(
         RentalDeposit,
-        (p.landlord.clone(), tenant.clone(), arbiter.clone(), p.token.clone(), p.pool.clone(), DEPOSIT, bps, end),
+        (
+            p.landlord.clone(),
+            tenant.clone(),
+            arbiter.clone(),
+            p.token.clone(),
+            p.pool.clone(),
+            p.vault.clone(),
+            DEPOSIT,
+            bps,
+            0u32,
+            end,
+        ),
     );
 }
 
@@ -501,4 +589,154 @@ fn early_dispute_cannot_release_the_deposit_mid_lease() {
     jump_to(&s, s.end + 31 * DAY);
     s.c.settle_after_arbiter_timeout();
     assert_eq!(s.t.balance(&s.tenant), 1_007 * USDC);
+}
+
+// ---------- DeFindex: split between Blend direct and a DeFindex vault ----------
+
+#[test]
+fn split_between_blend_and_defindex_with_yield_from_both() {
+    let s = setup_split(8_000, 5_000); // 200 liquid, 400 Blend, 400 DeFindex
+    fund(&s);
+    assert_eq!(s.t.balance(&s.pool.address), 407 * USDC); // 400 + 7 yield
+    assert_eq!(s.t.balance(&s.vault.address), 403 * USDC); // 400 + 3 yield
+    let d = s.c.get_deposit();
+    assert!(d.in_blend && d.in_vault);
+    assert_eq!(d.invested, 800 * USDC);
+
+    propose(&s, 120 * USDC);
+    s.c.accept_and_release();
+    assert_eq!(s.t.balance(&s.landlord), 120 * USDC);
+    assert_eq!(s.t.balance(&s.tenant), 890 * USDC); // 880 + 7 (Blend) + 3 (DeFindex)
+    let d = s.c.get_deposit();
+    assert_eq!(d.state, State::Closed);
+    assert!(!d.in_blend && !d.in_vault);
+}
+
+#[test]
+fn defindex_only() {
+    let s = setup_split(7_000, 10_000); // everything invested goes to the vault
+    fund(&s);
+    assert_eq!(s.t.balance(&s.pool.address), 7 * USDC); // Blend untouched
+    propose(&s, 120 * USDC);
+    s.c.accept_and_release();
+    assert_eq!(s.t.balance(&s.tenant), 883 * USDC); // 880 + 3 vault yield
+}
+
+#[test]
+fn illiquid_vault_buffer_pays_blend_part_returns_rest_later() {
+    let s = setup_split(8_000, 5_000);
+    fund(&s);
+    propose(&s, 120 * USDC);
+    s.vault.set_illiquid(&true);
+    s.c.accept_and_release();
+    // Buffer (200) + Blend (407) came back: landlord paid, tenant got the rest of that
+    assert_eq!(s.t.balance(&s.landlord), 120 * USDC);
+    assert_eq!(s.t.balance(&s.tenant), 487 * USDC);
+    let d = s.c.get_deposit();
+    assert_eq!(d.state, State::Settling);
+    assert!(!d.in_blend && d.in_vault);
+
+    assert!(s.c.try_claim_remaining().is_err()); // vault still illiquid
+    s.vault.set_illiquid(&false);
+    s.c.claim_remaining();
+    assert_eq!(s.t.balance(&s.tenant), 890 * USDC);
+    assert_eq!(s.c.get_deposit().state, State::Closed);
+}
+
+#[test]
+fn unwind_brings_both_venues_home() {
+    let s = setup_split(8_000, 5_000);
+    fund(&s);
+    jump_to(&s, s.end - 5 * DAY);
+    s.c.unwind();
+    let d = s.c.get_deposit();
+    assert!(!d.in_blend && !d.in_vault);
+    assert_eq!(s.t.balance(&s.c.address), 1_010 * USDC); // all back, with both yields
+}
+
+#[test]
+fn tenant_chooses_the_split() {
+    // landlord's default is 50/50, the tenant picks 100% Blend when locking the deposit
+    let s = setup_split(8_000, 5_000);
+    s.c.fund(
+        &s.landlord, &s.arbiter, &s.token, &s.pool.address, &s.vault.address, &DEPOSIT, &s.bps, &0u32,
+        &s.end,
+    );
+    let d = s.c.get_deposit();
+    assert_eq!(d.defindex_bps, 0);
+    assert!(d.in_blend && !d.in_vault);
+}
+
+#[test]
+fn tenant_chooses_how_much_to_invest() {
+    // landlord's default is 70%, the tenant prefers to keep everything liquid
+    let s = setup(7_000);
+    s.c.fund(
+        &s.landlord, &s.arbiter, &s.token, &s.pool.address, &s.vault.address, &DEPOSIT, &0u32, &s.dfx,
+        &s.end,
+    );
+    let d = s.c.get_deposit();
+    assert_eq!(d.invest_bps, 0);
+    assert!(!d.in_blend && !d.in_vault);
+    assert_eq!(s.t.balance(&s.c.address), DEPOSIT);
+}
+
+#[test]
+#[should_panic(expected = "invest share above 80%")]
+fn tenant_invest_share_is_capped() {
+    let s = setup(7_000);
+    s.c.fund(
+        &s.landlord, &s.arbiter, &s.token, &s.pool.address, &s.vault.address, &DEPOSIT, &8_001u32,
+        &s.dfx, &s.end,
+    );
+}
+
+#[test]
+#[should_panic(expected = "split above 100%")]
+fn tenant_split_is_capped() {
+    let s = setup_split(8_000, 5_000);
+    s.c.fund(
+        &s.landlord, &s.arbiter, &s.token, &s.pool.address, &s.vault.address, &DEPOSIT, &s.bps,
+        &10_001u32, &s.end,
+    );
+}
+
+/// Real auth (no mock_all_auths): the tenant signs only `fund` and their own transfer;
+/// the vault's nested pull from the contract must be covered by the contract's own
+/// `authorize_as_current_contract`.
+#[test]
+fn contract_authorizes_the_vault_pull_itself() {
+    use soroban_sdk::testutils::{MockAuth, MockAuthInvoke};
+    let s = setup_split(7_000, 10_000); // only the vault path (no Blend approve needed)
+    s.env.set_auths(&[]);
+    let args = (
+        s.landlord.clone(),
+        s.arbiter.clone(),
+        s.token.clone(),
+        s.pool.address.clone(),
+        s.vault.address.clone(),
+        DEPOSIT,
+        s.bps,
+        s.dfx,
+        s.end,
+    )
+        .into_val(&s.env);
+    let transfer_args = (s.tenant.clone(), s.c.address.clone(), DEPOSIT).into_val(&s.env);
+    s.env.mock_auths(&[MockAuth {
+        address: &s.tenant,
+        invoke: &MockAuthInvoke {
+            contract: &s.c.address,
+            fn_name: "fund",
+            args,
+            sub_invokes: &[MockAuthInvoke {
+                contract: &s.token,
+                fn_name: "transfer",
+                args: transfer_args,
+                sub_invokes: &[],
+            }],
+        },
+    }]);
+    fund(&s);
+    assert_eq!(s.t.balance(&s.vault.address), 703 * USDC);
+    assert!(s.c.get_deposit().in_vault);
 }

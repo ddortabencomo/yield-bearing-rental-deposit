@@ -7,11 +7,13 @@
 //!   3. `propose_deduction`: the landlord asks for an amount
 //!   4. `accept_and_release` / `dispute` + `resolve` / timeouts settle with a fixed waterfall:
 //!      the landlord's deduction first, everything else (principal + yield) to the tenant.
-//! The liquid buffer pays out even if Blend can't return funds that day; the rest is
-//! claimed later with `claim_remaining`.
+//! The invested share is split between two yield venues: a Blend pool (direct) and a
+//! DeFindex vault (which allocates to its own strategies). The liquid buffer pays out even
+//! if the venues can't return funds that day; the rest is claimed later with `claim_remaining`.
 use soroban_sdk::{
-    contract, contractclient, contractimpl, contracttype, token, vec, Address, Env, Map, String,
-    Vec,
+    auth::{ContractContext, InvokerContractAuthEntry, SubContractInvocation},
+    contract, contractclient, contractimpl, contracttype, token, vec, Address, Env, IntoVal, Map,
+    String, Symbol, Val, Vec,
 };
 
 /// Max share of the deposit that can go to Blend (80%). The rest is the liquidity buffer.
@@ -85,11 +87,14 @@ pub struct Deposit {
     pub landlord: Address,
     pub arbiter: Address,    // neutral third party that resolves disputes
     pub token: Address,
-    pub pool: Address,       // Blend pool where the invested share earns yield
+    pub pool: Address,       // Blend pool (direct venue)
+    pub vault: Address,      // DeFindex vault (managed venue)
     pub amount: i128,        // USDC has 7 decimals: 1 USDC = 10_000_000
-    pub invest_bps: u32,     // share sent to Blend, in basis points (7000 = 70%)
-    pub invested: i128,      // amount supplied to Blend
+    pub invest_bps: u32,     // share of the deposit invested, in basis points (7000 = 70%)
+    pub defindex_bps: u32,   // part of the invested share routed to the DeFindex vault
+    pub invested: i128,      // total amount invested (Blend + DeFindex)
     pub in_blend: bool,      // true while funds sit in Blend
+    pub in_vault: bool,      // true while we hold DeFindex vault shares
     pub lease_end: u64,      // unix timestamp (seconds)
     pub deduction: i128,
     pub evidence: String,    // link or hash of the landlord's evidence
@@ -131,33 +136,67 @@ fn nothing_left(p: &Positions) -> bool {
     p.supply.values().iter().all(|b| b <= 0)
 }
 
-/// Pull everything (principal + yield) back from Blend. Panics if Blend can't pay;
-/// if it only pays part, the rest stays recorded as `in_blend`.
-fn withdraw_all(env: &Env, d: &mut Deposit) {
-    if d.in_blend {
-        let me = env.current_contract_address();
-        let left = PoolClient::new(env, &d.pool)
-            .submit_with_allowance(&me, &me, &me, &withdraw_request(env, d));
-        d.in_blend = !nothing_left(&left);
-    }
-}
-
-/// Same, but never fails: returns false if Blend can't return everything right now
-/// (e.g. the pool is fully borrowed); a failed call is rolled back. If the call succeeded
-/// but its result can't be read, we can't prove the position is empty, so we stay
-/// conservative and keep it recorded as in Blend (the agreement waits in `Settling`).
-fn try_withdraw_all(env: &Env, d: &mut Deposit) -> bool {
+/// Try to bring the Blend part home. Never panics: a failed call is rolled back.
+/// Returns true if the call went through (even if Blend only returned part of it).
+fn try_blend(env: &Env, d: &mut Deposit) -> bool {
     if !d.in_blend {
-        return true;
+        return false;
     }
     let me = env.current_contract_address();
     let res = PoolClient::new(env, &d.pool)
         .try_submit_with_allowance(&me, &me, &me, &withdraw_request(env, d));
     match res {
-        Ok(Ok(left)) => d.in_blend = !nothing_left(&left),
-        Ok(Err(_)) | Err(_) => {}
+        Ok(Ok(left)) => {
+            d.in_blend = !nothing_left(&left);
+            true
+        }
+        // Succeeded but unreadable result: we can't prove it's empty, stay conservative
+        _ => false,
     }
-    !d.in_blend
+}
+
+/// Try to bring the DeFindex part home: redeem all our vault shares. Never panics.
+fn try_vault(env: &Env, d: &mut Deposit) -> bool {
+    if !d.in_vault {
+        return false;
+    }
+    let me = env.current_contract_address();
+    let shares_token = token::Client::new(env, &d.vault); // vault shares are a token
+    let shares = shares_token.balance(&me);
+    if shares <= 0 {
+        d.in_vault = false;
+        return true;
+    }
+    let args: Vec<Val> = (shares, vec![env, 0i128], me.clone()).into_val(env);
+    let res = env.try_invoke_contract::<Val, soroban_sdk::Error>(
+        &d.vault,
+        &Symbol::new(env, "withdraw"),
+        args,
+    );
+    if matches!(res, Ok(Ok(_))) {
+        d.in_vault = shares_token.balance(&me) > 0;
+        true
+    } else {
+        false
+    }
+}
+
+fn invested_somewhere(d: &Deposit) -> bool {
+    d.in_blend || d.in_vault
+}
+
+/// Try both venues; true when nothing is left invested anywhere.
+fn try_withdraw_all(env: &Env, d: &mut Deposit) -> bool {
+    try_blend(env, d);
+    try_vault(env, d);
+    !invested_somewhere(d)
+}
+
+/// Like `try_withdraw_all`, but panics if neither venue could return anything.
+fn withdraw_progress(env: &Env, d: &mut Deposit) {
+    let blend = try_blend(env, d);
+    let vault = try_vault(env, d);
+    assert!(blend || vault, "venues can't return funds right now");
 }
 
 /// Pay whatever the contract holds with the waterfall:
@@ -202,14 +241,17 @@ impl RentalDeposit {
         arbiter: Address,
         token: Address,
         pool: Address,
+        vault: Address,
         amount: i128,
         invest_bps: u32,
+        defindex_bps: u32,
         lease_end: u64,
     ) {
         landlord.require_auth();
         let now = env.ledger().timestamp();
         assert!(amount > 0, "amount must be positive");
         assert!(invest_bps <= MAX_INVEST_BPS, "invest share above 80%");
+        assert!(defindex_bps <= 10_000, "split above 100%");
         assert!(tenant != landlord, "tenant and landlord must differ");
         assert!(arbiter != tenant && arbiter != landlord, "arbiter must be neutral");
         assert!(lease_end > now, "lease already ended");
@@ -223,10 +265,13 @@ impl RentalDeposit {
                 arbiter,
                 token,
                 pool,
+                vault,
                 amount,
                 invest_bps,
+                defindex_bps,
                 invested: 0,
                 in_blend: false,
+                in_vault: false,
                 lease_end,
                 deduction: 0,
                 evidence: String::from_str(&env, ""),
@@ -242,15 +287,20 @@ impl RentalDeposit {
 
     /// Tenant accepts the landlord's terms by locking the deposit. The tenant re-states the
     /// terms, so their signature commits to exactly what they saw (the wallet shows them).
-    /// The invested share goes to Blend; the rest stays liquid.
+    /// `invest_bps` and `defindex_bps` are the tenant's own choice (the yield and its risk are
+    /// theirs): how much to invest (never above 80%, so the landlord is always protected by a
+    /// liquid buffer of at least 20% plus the unwind window) and how to split it between Blend
+    /// and the DeFindex reserve. The landlord's values are only defaults.
     pub fn fund(
         env: Env,
         landlord: Address,
         arbiter: Address,
         token: Address,
         pool: Address,
+        vault: Address,
         amount: i128,
         invest_bps: u32,
+        defindex_bps: u32,
         lease_end: u64,
     ) {
         let mut d = load(&env);
@@ -261,11 +311,15 @@ impl RentalDeposit {
                 && arbiter == d.arbiter
                 && token == d.token
                 && pool == d.pool
+                && vault == d.vault
                 && amount == d.amount
-                && invest_bps == d.invest_bps
                 && lease_end == d.lease_end,
             "terms mismatch"
         );
+        assert!(invest_bps <= MAX_INVEST_BPS, "invest share above 80%");
+        assert!(defindex_bps <= 10_000, "split above 100%");
+        d.invest_bps = invest_bps; // the tenant decides how much of their deposit earns yield
+        d.defindex_bps = defindex_bps; // ...and where that yield comes from
         assert!(d.lease_end > env.ledger().timestamp(), "lease already ended");
 
         let me = env.current_contract_address();
@@ -273,22 +327,44 @@ impl RentalDeposit {
         t.transfer(&d.tenant, &me, &d.amount);
 
         let invested = d.amount * d.invest_bps as i128 / 10_000;
-        if invested > 0 {
-            // 1) allow the pool to pull exactly `invested` from this contract
-            t.approve(&me, &d.pool, &invested, &(env.ledger().sequence() + 1_000));
+        let to_vault = invested * d.defindex_bps as i128 / 10_000;
+        let to_blend = invested - to_vault;
+
+        if to_blend > 0 {
+            // Blend: 1) allow the pool to pull exactly `to_blend` from this contract,
             // 2) ask the pool to pull it and record it as our supply position
+            t.approve(&me, &d.pool, &to_blend, &(env.ledger().sequence() + 1_000));
             PoolClient::new(&env, &d.pool).submit_with_allowance(
                 &me,
                 &me,
                 &me,
                 &vec![
                     &env,
-                    Request { address: d.token.clone(), amount: invested, request_type: REQ_SUPPLY },
+                    Request { address: d.token.clone(), amount: to_blend, request_type: REQ_SUPPLY },
                 ],
             );
         }
+        if to_vault > 0 {
+            // DeFindex: the vault pulls the tokens from us inside `deposit` (a nested call),
+            // so we explicitly authorize exactly that transfer, then deposit and invest.
+            env.authorize_as_current_contract(vec![
+                &env,
+                InvokerContractAuthEntry::Contract(SubContractInvocation {
+                    context: ContractContext {
+                        contract: d.token.clone(),
+                        fn_name: Symbol::new(&env, "transfer"),
+                        args: (me.clone(), d.vault.clone(), to_vault).into_val(&env),
+                    },
+                    sub_invocations: vec![&env],
+                }),
+            ]);
+            let args: Vec<Val> =
+                (vec![&env, to_vault], vec![&env, 0i128], me.clone(), true).into_val(&env);
+            env.invoke_contract::<Val>(&d.vault, &Symbol::new(&env, "deposit"), args);
+        }
         d.invested = invested;
-        d.in_blend = invested > 0;
+        d.in_blend = to_blend > 0;
+        d.in_vault = to_vault > 0;
         d.state = State::Funded;
         save(&env, &d);
     }
@@ -361,16 +437,16 @@ impl RentalDeposit {
     pub fn claim_remaining(env: Env) {
         let mut d = load(&env);
         assert!(d.state == State::Settling, "wrong state");
-        withdraw_all(&env, &mut d);
+        withdraw_progress(&env, &mut d);
         pay_out(&env, &mut d);
-        if !d.in_blend {
+        if !invested_somewhere(&d) {
             d.state = State::Closed;
         }
         save(&env, &d);
     }
 
-    /// Anyone can move the funds out of Blend during the last 30 days of the lease
-    /// (or after it), so settlement never depends on the pool's liquidity that day.
+    /// Anyone can move the funds out of Blend and DeFindex during the last 30 days of the
+    /// lease (or after it), so settlement never depends on the venues' liquidity that day.
     pub fn unwind(env: Env) {
         let mut d = load(&env);
         assert!(
@@ -379,12 +455,12 @@ impl RentalDeposit {
                 || d.state == State::Disputed,
             "wrong state"
         );
-        assert!(d.in_blend, "nothing in Blend");
+        assert!(invested_somewhere(&d), "nothing invested");
         assert!(
             env.ledger().timestamp().saturating_add(UNWIND_WINDOW) >= d.lease_end,
             "unwind window not open"
         );
-        withdraw_all(&env, &mut d);
+        withdraw_progress(&env, &mut d);
         save(&env, &d);
     }
 
