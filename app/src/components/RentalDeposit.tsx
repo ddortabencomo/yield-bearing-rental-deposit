@@ -67,6 +67,7 @@ export const RentalDeposit = () => {
 	const refresh = useCallback(async () => {
 		const d = await getDeposit(contractId)
 		setDeposit(d)
+		if (d && d.state === "Closed") setLiquid(0n) // everything was paid out
 		if (d && d.state !== "Closed") {
 			if (d.in_blend) {
 				// While invested, the contract holds exactly the buffer (enforced on-chain)
@@ -382,7 +383,9 @@ export const RentalDeposit = () => {
 								{fromUnits(buffer)} {TOKEN_SYMBOL}
 							</strong>
 							<span className={styles.muted}>
-								held in the contract · pays deductions instantly
+								{deposit.state === "Closed"
+									? "paid out at settlement"
+									: "held in the contract · pays deductions instantly"}
 							</span>
 						</div>
 						<div className={`${styles.tile} ${styles.yieldTile}`}>
