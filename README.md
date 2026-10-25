@@ -6,7 +6,7 @@
 
 | | |
 |---|---|
-| **Live app** | _Netlify link_ |
+| **Live app** | [blendlord.netlify.app](https://blendlord.netlify.app) |
 | **Live agreement on testnet** (offer → fund → earn in Blend + DeFindex → deduction → release, landlord yield share 3%) | [`CBKF…YDAA` on stellar.expert](https://stellar.expert/explorer/testnet/contract/CBKF46ALDRFM6BXJWSKY375LFTEMPOU67XXNJQO6TJ4H6TPKI5WCYDAA) |
 | Contract code (Wasm hash) | `c0161a5e6678caf37b6dbd45e2261de34cb18711ed6bc1ecb767ad70dfc73db5` |
 | Blendlord DeFindex reserve vault | [`CDUL…QRDED`](https://stellar.expert/explorer/testnet/contract/CDULNJ6EKQJJRPPZIGZ3R4T2W3DVTDFQTAMX3RBVV3RII5JJAXZQRDED) |
