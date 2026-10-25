@@ -3,34 +3,17 @@
 	margin: 0 auto;
 }
 
-.Home > div:first-child {
+.hero {
 	text-align: center;
-	margin: 4rem auto;
-	max-width: 560px;
+	margin: 2rem auto 2.5rem;
+	max-width: 640px;
 }
 
-.Home h1 {
-	font-weight: normal;
+.hero h1 {
+	font-weight: 700;
+	margin-bottom: 0.5rem;
 }
 
-.Home :global(.card) {
-	margin-bottom: 2rem;
-}
-
-.contractNav {
-	display: flex;
-	gap: 1rem;
-	margin: 1rem 0;
-	flex-wrap: wrap;
-}
-
-.cards {
-	display: flex;
-	gap: 2rem;
-	margin-bottom: 2rem;
-}
-
-.cards :global(.card) {
-	flex: 1;
-	margin-bottom: 0;
+.hero p {
+	color: var(--color-text-muted);
 }
