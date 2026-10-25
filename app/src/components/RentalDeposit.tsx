@@ -3,6 +3,7 @@ import { contract } from "@stellar/stellar-sdk"
 import { useCallback, useEffect, useState } from "react"
 import { useSearchParams } from "react-router-dom"
 import { useWallet } from "../hooks/useWallet"
+import { QuantPanel } from "./QuantPanel"
 import {
 	BLEND_POOL,
 	DEFAULT_CONTRACT,
@@ -320,6 +321,13 @@ export const RentalDeposit = () => {
 							{fromUnits(fundUnits - fundInvested)} liquid buffer
 						</div>
 					</div>
+					<QuantPanel
+						amount={fundUnits}
+						investPct={investPct}
+						onInvestPct={setInvestPct}
+						leaseDays={Number(leaseDays) || 1}
+						symbol={sym}
+					/>
 					<button
 						className={styles.primary}
 						disabled={!!busy || !address || !landlord || fundUnits <= 0n}

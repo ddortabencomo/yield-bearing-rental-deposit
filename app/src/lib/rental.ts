@@ -326,3 +326,39 @@ export const getBalance = async (holder: string, asset = TOKEN): Promise<bigint>
 	}
 	return BigInt(scValToNative(sim.result.retval) as bigint)
 }
+
+// ---------- Live Blend rates (same model as Blend's own UI/SDK) ----------
+
+export interface PoolRates {
+	utilization: number // share of supplied funds currently borrowed
+	borrowApr: number
+	supplyApr: number // what suppliers (our contract) earn
+}
+
+/** Blend v2 interest-rate model: piecewise-linear in utilization, scaled by ir_mod. */
+export const getSupplyRates = async (pool = BLEND_POOL, asset = TOKEN): Promise<PoolRates> => {
+	type Reserve = {
+		config: Record<string, number | bigint>
+		data: Record<string, bigint | number>
+	}
+	const [reserve, config] = await Promise.all([
+		read<Reserve>(pool, "get_reserve", { asset }),
+		read<{ bstop_rate: number }>(pool, "get_config").catch(() => ({ bstop_rate: 2_000_000 })),
+	])
+	const f7 = (x: number | bigint) => Number(x) / 1e7
+	const f12 = (x: number | bigint) => Number(x) / 1e12
+	const c = reserve.config
+	const d = reserve.data
+	const supplied = Number(d.b_supply) * f12(d.b_rate)
+	const borrowed = Number(d.d_supply) * f12(d.d_rate)
+	const u = supplied > 0 ? borrowed / supplied : 0
+	const target = f7(c.util)
+	const [rBase, rOne, rTwo, rThree] = [c.r_base, c.r_one, c.r_two, c.r_three].map(f7)
+	const irMod = f7(d.ir_mod)
+	let borrowApr: number
+	if (u <= target) borrowApr = irMod * (rBase + (target > 0 ? u / target : 0) * rOne)
+	else if (u <= 0.95) borrowApr = irMod * (rBase + rOne + ((u - target) / (0.95 - target)) * rTwo)
+	else borrowApr = irMod * (rBase + rOne + rTwo) + ((u - 0.95) / 0.05) * rThree
+	const supplyApr = borrowApr * u * (1 - f7(config.bstop_rate))
+	return { utilization: u, borrowApr, supplyApr }
+}

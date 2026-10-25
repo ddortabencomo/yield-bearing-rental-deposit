@@ -1,0 +1,232 @@
+{
+  "assumptions": {
+    "p_no_deduction": 0.6,
+    "median_deduction": 0.12,
+    "sigma": 0.85,
+    "eps": 0.005,
+    "supply_apr": 0.05,
+    "lease_years": 1.0,
+    "max_invest": 0.8,
+    "n_sims": 2000000
+  },
+  "scenarios": {
+    "no_unwind": {
+      "q": 0.25,
+      "optimal_invest": 0.514287285985698,
+      "recommended_bps": 5000,
+      "curve": [
+        {
+          "invest_bps": 0,
+          "shortfall_prob": 0.0,
+          "shortfall_prob_exact": 0.0,
+          "expected_yield": 0.0
+        },
+        {
+          "invest_bps": 500,
+          "shortfall_prob": 0.000766,
+          "shortfall_prob_exact": 0.0007464793088935029,
+          "expected_yield": 0.0025000000000000005
+        },
+        {
+          "invest_bps": 1000,
+          "shortfall_prob": 0.000904,
+          "shortfall_prob_exact": 0.0008882643283173189,
+          "expected_yield": 0.005000000000000001
+        },
+        {
+          "invest_bps": 1500,
+          "shortfall_prob": 0.0010685,
+          "shortfall_prob_exact": 0.0010632982420566122,
+          "expected_yield": 0.0075
+        },
+        {
+          "invest_bps": 2000,
+          "shortfall_prob": 0.001298,
+          "shortfall_prob_exact": 0.0012810592605783846,
+          "expected_yield": 0.010000000000000002
+        },
+        {
+          "invest_bps": 2500,
+          "shortfall_prob": 0.001578,
+          "shortfall_prob_exact": 0.0015542684009826014,
+          "expected_yield": 0.0125
+        },
+        {
+          "invest_bps": 3000,
+          "shortfall_prob": 0.0019165,
+          "shortfall_prob_exact": 0.001900206867845944,
+          "expected_yield": 0.015
+        },
+        {
+          "invest_bps": 3500,
+          "shortfall_prob": 0.002371,
+          "shortfall_prob_exact": 0.002342663064303699,
+          "expected_yield": 0.017499999999999998
+        },
+        {
+          "invest_bps": 4000,
+          "shortfall_prob": 0.0029365,
+          "shortfall_prob_exact": 0.0029148602724,
+          "expected_yield": 0.020000000000000004
+        },
+        {
+          "invest_bps": 4500,
+          "shortfall_prob": 0.0036895,
+          "shortfall_prob_exact": 0.003663942346850143,
+          "expected_yield": 0.022500000000000003
+        },
+        {
+          "invest_bps": 5000,
+          "shortfall_prob": 0.004652,
+          "shortfall_prob_exact": 0.004657987906822271,
+          "expected_yield": 0.025
+        },
+        {
+          "invest_bps": 5500,
+          "shortfall_prob": 0.005991,
+          "shortfall_prob_exact": 0.005997221651364744,
+          "expected_yield": 0.027500000000000004
+        },
+        {
+          "invest_bps": 6000,
+          "shortfall_prob": 0.007797,
+          "shortfall_prob_exact": 0.007832356556207547,
+          "expected_yield": 0.03
+        },
+        {
+          "invest_bps": 6500,
+          "shortfall_prob": 0.0103435,
+          "shortfall_prob_exact": 0.01039532634019282,
+          "expected_yield": 0.0325
+        },
+        {
+          "invest_bps": 7000,
+          "shortfall_prob": 0.0139545,
+          "shortfall_prob_exact": 0.014051931106789492,
+          "expected_yield": 0.034999999999999996
+        },
+        {
+          "invest_bps": 7500,
+          "shortfall_prob": 0.019306,
+          "shortfall_prob_exact": 0.019393319280242072,
+          "expected_yield": 0.037500000000000006
+        },
+        {
+          "invest_bps": 8000,
+          "shortfall_prob": 0.0273865,
+          "shortfall_prob_exact": 0.027392954368490943,
+          "expected_yield": 0.04000000000000001
+        }
+      ]
+    },
+    "with_unwind": {
+      "q": 0.02,
+      "optimal_invest": 0.8,
+      "recommended_bps": 8000,
+      "curve": [
+        {
+          "invest_bps": 0,
+          "shortfall_prob": 0.0,
+          "shortfall_prob_exact": 0.0,
+          "expected_yield": 0.0
+        },
+        {
+          "invest_bps": 500,
+          "shortfall_prob": 5.95e-05,
+          "shortfall_prob_exact": 5.971834471148023e-05,
+          "expected_yield": 0.0025000000000000005
+        },
+        {
+          "invest_bps": 1000,
+          "shortfall_prob": 7.55e-05,
+          "shortfall_prob_exact": 7.106114626538551e-05,
+          "expected_yield": 0.005000000000000001
+        },
+        {
+          "invest_bps": 1500,
+          "shortfall_prob": 9e-05,
+          "shortfall_prob_exact": 8.506385936452898e-05,
+          "expected_yield": 0.0075
+        },
+        {
+          "invest_bps": 2000,
+          "shortfall_prob": 0.0001045,
+          "shortfall_prob_exact": 0.00010248474084627077,
+          "expected_yield": 0.010000000000000002
+        },
+        {
+          "invest_bps": 2500,
+          "shortfall_prob": 0.000124,
+          "shortfall_prob_exact": 0.00012434147207860812,
+          "expected_yield": 0.0125
+        },
+        {
+          "invest_bps": 3000,
+          "shortfall_prob": 0.000151,
+          "shortfall_prob_exact": 0.00015201654942767552,
+          "expected_yield": 0.015
+        },
+        {
+          "invest_bps": 3500,
+          "shortfall_prob": 0.0001875,
+          "shortfall_prob_exact": 0.00018741304514429592,
+          "expected_yield": 0.017499999999999998
+        },
+        {
+          "invest_bps": 4000,
+          "shortfall_prob": 0.000231,
+          "shortfall_prob_exact": 0.00023318882179200001,
+          "expected_yield": 0.020000000000000004
+        },
+        {
+          "invest_bps": 4500,
+          "shortfall_prob": 0.000305,
+          "shortfall_prob_exact": 0.0002931153877480115,
+          "expected_yield": 0.022500000000000003
+        },
+        {
+          "invest_bps": 5000,
+          "shortfall_prob": 0.0003775,
+          "shortfall_prob_exact": 0.0003726390325457817,
+          "expected_yield": 0.025
+        },
+        {
+          "invest_bps": 5500,
+          "shortfall_prob": 0.000481,
+          "shortfall_prob_exact": 0.0004797777321091795,
+          "expected_yield": 0.027500000000000004
+        },
+        {
+          "invest_bps": 6000,
+          "shortfall_prob": 0.0006275,
+          "shortfall_prob_exact": 0.0006265885244966038,
+          "expected_yield": 0.03
+        },
+        {
+          "invest_bps": 6500,
+          "shortfall_prob": 0.0008495,
+          "shortfall_prob_exact": 0.0008316261072154256,
+          "expected_yield": 0.0325
+        },
+        {
+          "invest_bps": 7000,
+          "shortfall_prob": 0.0011325,
+          "shortfall_prob_exact": 0.0011241544885431593,
+          "expected_yield": 0.034999999999999996
+        },
+        {
+          "invest_bps": 7500,
+          "shortfall_prob": 0.0015585,
+          "shortfall_prob_exact": 0.0015514655424193659,
+          "expected_yield": 0.037500000000000006
+        },
+        {
+          "invest_bps": 8000,
+          "shortfall_prob": 0.002231,
+          "shortfall_prob_exact": 0.0021914363494792755,
+          "expected_yield": 0.04000000000000001
+        }
+      ]
+    }
+  }
+}
