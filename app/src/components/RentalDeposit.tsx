@@ -56,7 +56,8 @@ export const RentalDeposit = () => {
 	const [params, setParams] = useSearchParams()
 	const creating = params.get("new") === "1"
 	const renting = params.get("rent") === "1" // tenant without a link yet
-	const contractId = params.get("id") || (creating || renting ? "" : DEFAULT_CONTRACT)
+	const contractId = params.get("id") || ""
+	const choosing = !contractId && !creating && !renting // no agreement yet: pick a role
 	const [agreementInput, setAgreementInput] = useState("")
 
 	const [deposit, setDeposit] = useState<Deposit | null>(null)
@@ -361,6 +362,34 @@ export const RentalDeposit = () => {
 
 			{loading ? (
 				<div className="card">Loading agreement…</div>
+			) : choosing ? (
+				/* ---------- Start: pick a role ---------- */
+				<div className="card">
+					<h2>Start here</h2>
+					<p className={styles.muted}>
+						Landlords offer the terms; tenants open the agreement their landlord sends them.
+					</p>
+					<div className={styles.actions}>
+						<button className={styles.primary} onClick={() => setParams({ rent: "1" })}>
+							I rent a home
+						</button>
+						<button onClick={() => setParams({ new: "1" })}>I own a home</button>
+					</div>
+					<p className={styles.muted}>
+						Just looking?{" "}
+						<a
+							href={`/?id=${DEFAULT_CONTRACT}#app`}
+							onClick={(e) => {
+								e.preventDefault()
+								scrollToApp.current = true
+								setParams({ id: DEFAULT_CONTRACT })
+							}}
+						>
+							See a live demo agreement
+						</a>
+						.
+					</p>
+				</div>
 			) : renting && !contractId ? (
 				/* ---------- Tenant: open the agreement the landlord sent ---------- */
 				<div className="card">
