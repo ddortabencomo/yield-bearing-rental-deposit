@@ -13,7 +13,7 @@
 | Blendlord DeFindex reserve vault | [`CDUL…QRDED`](https://stellar.expert/explorer/testnet/contract/CDULNJ6EKQJJRPPZIGZ3R4T2W3DVTDFQTAMX3RBVV3RII5JJAXZQRDED) |
 | Tests | **48 unit tests**, all passing (`cargo test -p rental-deposit`) |
 | Typical fee per action | **≈ 0.003 XLM** |
-| Demo video · Pitch deck | _links added at submission_ |
+| Demo video · Pitch deck | [Demo video (YouTube)](https://youtu.be/yg-Np_QYzLw) · [Pitch deck (PDF)](docs/Blendlord-deck.pdf) · [PowerPoint](docs/Blendlord-deck.pptx) |
 
 ---
 
@@ -253,6 +253,7 @@ deploy/defindex/            Parameters used to create the Blendlord vault with t
 - **Mid-lease claims with top-ups:** today a deposit is settled once, at move-out, as in the real world. Next, the landlord can claim during the lease (with the tenant's consent or the arbiter's ruling) and the tenant tops the deposit back up, so the guarantee stays whole and the agreement keeps running
 - **Multi-strategy reserve:** more strategies in the DeFindex vault, allocated with the same risk budget (maximize Σ wᵢrᵢ − λ·riskᵢ)
 - **Rebalancer as a keeper** with monitoring, reading move-out dates directly from the agreements
+- **Re-enable the 1% platform fee** on the vault (`lock_fees(100)`) once DeFindex's testnet fee account can receive Blend's test USDC; on mainnet it works as designed
 - **Calibrate the model** with real deduction data from agencies and student residences
 - **Arbitration** via multisig or an arbitration partner; build on existing escrow providers (e.g. Trustless Work) as the custody layer
 - **Regulatory fit:** where deposits must be lodged with a public body (e.g. Spain's regional deposit registries), offer the product to agencies as a compliant custody option
