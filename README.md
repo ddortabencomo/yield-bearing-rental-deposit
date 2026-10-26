@@ -7,7 +7,8 @@
 | | |
 |---|---|
 | **Live app** | [blendlord.netlify.app](https://blendlord.netlify.app) |
-| **Live agreement on testnet** (offer → fund → earn in Blend + DeFindex → deduction → release, landlord yield share 3%) | [`CBKF…YDAA` on stellar.expert](https://stellar.expert/explorer/testnet/contract/CBKF46ALDRFM6BXJWSKY375LFTEMPOU67XXNJQO6TJ4H6TPKI5WCYDAA) |
+| **Live agreement, earning now** (100 USDC · 80% invested · 50% Blend / 50% DeFindex · 60-day lease) | [`CAYD…4ERN` on stellar.expert](https://stellar.expert/explorer/testnet/contract/CAYD7CI37ASKCBKVPJ4XMEE6MLSRN6JNCAJ3H6DWWQ6ZCDOOQEJ34ERN) |
+| **Completed agreement** (offer → fund → earn in Blend + DeFindex → deduction → release, landlord yield share 3%) | [`CBKF…YDAA` on stellar.expert](https://stellar.expert/explorer/testnet/contract/CBKF46ALDRFM6BXJWSKY375LFTEMPOU67XXNJQO6TJ4H6TPKI5WCYDAA) |
 | Contract code (Wasm hash) | `c0161a5e6678caf37b6dbd45e2261de34cb18711ed6bc1ecb767ad70dfc73db5` |
 | Blendlord DeFindex reserve vault | [`CDUL…QRDED`](https://stellar.expert/explorer/testnet/contract/CDULNJ6EKQJJRPPZIGZ3R4T2W3DVTDFQTAMX3RBVV3RII5JJAXZQRDED) |
 | Tests | **44 unit tests**, all passing (`cargo test -p rental-deposit`) |
@@ -148,6 +149,8 @@ $$c^* = \text{quantile}_{1-\varepsilon/q}(D), \qquad w^* = \min(1 - c^*,\ 80\%)$
 ![Delayed-payout probability vs. share invested](quant/curve.png)
 
 **Early unwind isn't a detail:** it raises the safe share from 51% to 80%, lifting expected yield from ~2.5% to ~4% of the deposit per year at a 5% supply APR, at the same risk. In the app, the tenant sees the recommendation, the live delay probability for the share they choose, and the expected yield at Blend's **current** supply APR.
+
+**Where to invest (Blend direct vs. the DeFindex reserve).** The model also recommends the split, using the same utilization bands as the rebalancer (`app/src/lib/split.ts`): with Blend comfortably liquid (≤ 85% borrowed) it recommends 20% DeFindex, mostly direct for the full rate; between 85% and 94% it moves linearly toward the reserve; at ≥ 94%, or when the lease ends within 30 days, it recommends 100% DeFindex, the reserve our model de-risks. The tenant sees the recommendation and the reason, and can apply it with one click.
 
 The same idea drives the DeFindex reserve: `q` rises with Blend's utilization, so the rebalancer de-risks the shared reserve when the pool gets crowded and before move-outs.
 

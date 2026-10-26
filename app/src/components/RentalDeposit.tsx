@@ -30,6 +30,8 @@ import {
 	UNWIND_WINDOW_SECS,
 } from "../lib/rental"
 import styles from "./RentalDeposit.module.css"
+import { getSupplyRates } from "../lib/rental"
+import { recommendDefindexPct, splitReason } from "../lib/split"
 
 const STEPS = ["Agree", "Earn", "Propose", "Settle"] as const
 
@@ -75,6 +77,12 @@ export const RentalDeposit = () => {
 	const [amount, setAmount] = useState("100")
 	const [tenantInvestPct, setTenantInvestPct] = useState(70)
 	const [tenantDfxPct, setTenantDfxPct] = useState(50)
+	const [utilization, setUtilization] = useState<number | null>(null)
+	useEffect(() => {
+		getSupplyRates()
+			.then((r) => setUtilization(r.utilization))
+			.catch(() => setUtilization(null))
+	}, [])
 	const [landlordYieldPct, setLandlordYieldPct] = useState(3)
 	const [leaseDays, setLeaseDays] = useState("7")
 	const [deduction, setDeduction] = useState("12")
@@ -586,6 +594,22 @@ export const RentalDeposit = () => {
 										holds its own position. DeFindex reserve: a shared vault whose exposure
 										to Blend our risk model adjusts to pool liquidity and upcoming move-outs.
 									</span>
+									{utilization !== null &&
+										(() => {
+											const daysLeft = Math.max(0, (deposit.lease_end - now) / 86_400)
+											const rec = recommendDefindexPct(utilization, daysLeft)
+											return (
+												<span className={styles.muted}>
+													<strong>Risk model: {rec}% DeFindex · {100 - rec}% Blend direct.</strong>{" "}
+													{splitReason(utilization, daysLeft)}{" "}
+													{rec !== tenantDfxPct && (
+														<button type="button" onClick={() => setTenantDfxPct(rec)}>
+															Apply
+														</button>
+													)}
+												</span>
+											)
+										})()}
 								</label>
 							)}
 							{!trustedTerms && (
