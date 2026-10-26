@@ -47,7 +47,12 @@ def invoke(contract: str, fn: str, *args: str, send: bool = False) -> object:
     cmd += ["--", fn, *args]
     out = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
     if out.returncode != 0:
-        sys.exit(f"stellar CLI failed:\n{out.stderr.strip()[-1500:]}")
+        err = out.stderr.strip()
+        with open("quant/last-error.txt", "w", encoding="utf-8") as f:  # full log for debugging
+            f.write(err)
+        # the CLI prints the real error first and the diagnostic events after it
+        key = [l for l in err.splitlines() if "error" in l.lower() and "Diagnostic Event" not in l]
+        sys.exit("stellar CLI failed:\n" + "\n".join(key[:8] or [err[:1500]]))
     lines = [l for l in out.stdout.strip().splitlines() if l.strip()]
     if not lines:
         return None

@@ -45,3 +45,4 @@ app-lib/clients/*
 
 # TypeScript incremental build info
 *.tsbuildinfo
+quant/last-error.txt

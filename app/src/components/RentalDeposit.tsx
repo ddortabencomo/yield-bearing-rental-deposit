@@ -39,6 +39,7 @@ const stepIndex = (d: Deposit | null): number => {
 	if (!d) return 0
 	switch (d.state) {
 		case "Offered":
+		case "Declined":
 			return 0
 		case "Funded":
 			return 1
@@ -52,6 +53,26 @@ const stepIndex = (d: Deposit | null): number => {
 }
 
 const short = (a: string) => `${a.slice(0, 4)}…${a.slice(-4)}`
+
+/** Agreements this browser has created or opened as landlord or tenant (per device only;
+ * an on-chain index via a factory contract is the production version). */
+type Saved = { id: string; role: string; amount: string; state: string; at: number }
+const SAVED_KEY = "blendlord.agreements"
+const loadSaved = (): Saved[] => {
+	try {
+		return JSON.parse(localStorage.getItem(SAVED_KEY) ?? "[]") as Saved[]
+	} catch {
+		return []
+	}
+}
+const remember = (a: Saved) => {
+	try {
+		const rest = loadSaved().filter((x) => x.id !== a.id)
+		localStorage.setItem(SAVED_KEY, JSON.stringify([a, ...rest].slice(0, 20)))
+	} catch {
+		/* storage unavailable: the list is only a convenience */
+	}
+}
 
 export const RentalDeposit = () => {
 	const { address, signTransaction, updateBalances } = useWallet()
@@ -330,6 +351,39 @@ export const RentalDeposit = () => {
 		deposit.vault === DEFINDEX_VAULT &&
 		deposit.arbiter === PLATFORM_ARBITER &&
 		(Object.values(ASSETS) as string[]).includes(deposit.token)
+	useEffect(() => {
+		if (deposit && contractId && (role === "Tenant" || role === "Landlord")) {
+			remember({
+				id: contractId,
+				role,
+				amount: `${fromUnits(deposit.amount)} ${symbolOf(deposit.token)}`,
+				state: deposit.state,
+				at: Date.now(),
+			})
+		}
+	}, [deposit, contractId, role])
+	const saved = loadSaved()
+	const savedList = saved.length > 0 && (
+		<div className={styles.waterfall}>
+			{saved.map((a) => (
+				<div key={a.id}>
+					<a
+						href={`/?id=${a.id}#app`}
+						onClick={(e) => {
+							e.preventDefault()
+							scrollToApp.current = true
+							setParams({ id: a.id })
+						}}
+					>
+						{short(a.id)}
+					</a>{" "}
+					· {a.role} · {a.amount}
+					<strong>{a.state === "DeductionProposed" ? "Deduction proposed" : a.state}</strong>
+				</div>
+			))}
+		</div>
+	)
+
 	const current = stepIndex(deposit)
 	const sym = deposit ? symbolOf(deposit.token) : TOKEN_SYMBOL
 
@@ -344,7 +398,7 @@ export const RentalDeposit = () => {
 							<code>{short(contractId)}</code>
 						</a>
 					) : (
-						<code>new</code>
+						<code>{creating ? "new" : "none open"}</code>
 					)}
 					{role && <span className={styles.role}>You: {role}</span>}
 				</div>
@@ -383,6 +437,32 @@ export const RentalDeposit = () => {
 						</button>
 						<button onClick={() => setParams({ new: "1" })}>I own a home</button>
 					</div>
+					<label className={styles.field}>
+						Find an agreement: paste its link or ID
+						<input
+							value={agreementInput}
+							onChange={(e) => setAgreementInput(e.target.value.trim())}
+							placeholder="https://…?id=C… or C…"
+						/>
+					</label>
+					<button
+						disabled={!/C[A-Z2-7]{55}/.test(agreementInput)}
+						onClick={() => {
+							const m = agreementInput.match(/C[A-Z2-7]{55}/)
+							if (m) {
+								scrollToApp.current = true
+								setParams({ id: m[0] })
+							}
+						}}
+					>
+						Open agreement
+					</button>
+					<h3 className={styles.h3}>My agreements on this device</h3>
+					{savedList || (
+						<p className={styles.muted}>
+							None yet. Agreements you create or open with your wallet connected appear here.
+						</p>
+					)}
 					<p className={styles.muted}>
 						Just looking?{" "}
 						<a
@@ -427,6 +507,12 @@ export const RentalDeposit = () => {
 					>
 						Open agreement
 					</button>
+					{savedList && (
+						<>
+							<h3 className={styles.h3}>My agreements on this device</h3>
+							{savedList}
+						</>
+					)}
 					<p className={styles.muted}>
 						No agreement yet?{" "}
 						<a
@@ -509,6 +595,14 @@ export const RentalDeposit = () => {
 					{!address && (
 						<p className={styles.muted}>Connect the landlord&apos;s wallet to continue.</p>
 					)}
+				</div>
+			) : deposit.state === "Declined" ? (
+				<div className="card">
+					<h2>Offer declined</h2>
+					<p className={styles.muted}>
+						The tenant said no to these terms. No money moved. The landlord can make a new
+						offer with different terms.
+					</p>
 				</div>
 			) : deposit.state === "Offered" || cancelled ? (
 				/* ---------- Offered: the tenant reviews and accepts by depositing ---------- */
@@ -642,7 +736,18 @@ export const RentalDeposit = () => {
 								>
 									{busy === "Deposit locked" ? "Signing…" : "Accept terms & lock deposit"}
 								</button>
-							) : role === "Landlord" ? (
+							) : null}
+							{role === "Tenant" && (
+								<button
+									disabled={!!busy}
+									onClick={() =>
+										void run("Offer declined", () => build(contractId, "decline_offer"))
+									}
+								>
+									{busy === "Offer declined" ? "Signing…" : "Decline offer"}
+								</button>
+							)}
+							{role === "Tenant" ? null : role === "Landlord" ? (
 								<>
 									<p className={styles.muted}>
 										Waiting for your tenant to accept. Send them this page&apos;s

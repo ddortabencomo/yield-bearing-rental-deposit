@@ -19,6 +19,22 @@ const probAt = (pts: Point[], bps: number) =>
 		Math.abs(p.invest_bps - bps) < Math.abs(best.invest_bps - bps) ? p : best,
 	).shortfall_prob_exact
 
+/**
+ * q, the chance the venue can't return funds when needed, depends on how crowded Blend is.
+ * Blend refuses withdrawals that would push utilization past its cap, so with early unwind
+ * q is 2% while the pool is comfortable (≤ 85% borrowed) and rises linearly to the
+ * no-unwind level (25%) as utilization approaches 94%, the same bands as the rebalancer.
+ */
+const U_SAFE = 0.85
+const U_STOP = 0.94
+export const qFromUtilization = (u: number | null): number => {
+	if (u === null || u <= U_SAFE) return scenario.q
+	if (u >= U_STOP) return noUnwind.q
+	return scenario.q + ((u - U_SAFE) / (U_STOP - U_SAFE)) * (noUnwind.q - scenario.q)
+}
+/** P(D > 1 - w): the deduction tail, from the Monte Carlo curve (P(delay) / q). */
+const tailAt = (bps: number) => probAt(scenario.curve, bps) / scenario.q
+
 const pct = (x: number, digits = 2) => `${(x * 100).toFixed(digits)}%`
 
 export const QuantPanel = ({
@@ -45,8 +61,14 @@ export const QuantPanel = ({
 			.catch((e) => console.error("rates:", e))
 	}, [])
 
-	const recommended = Math.min(scenario.recommended_bps, MAX_INVEST_BPS) / 100
-	const prob = probAt(scenario.curve, investPct * 100)
+	const q = qFromUtilization(rates ? rates.utilization : null)
+	// largest share (in 5% steps, ≤ 80%) whose delay probability stays within ε at today's q
+	const recommended =
+		[...Array(MAX_INVEST_BPS / 500 + 1).keys()]
+			.map((i) => i * 5)
+			.filter((w) => tailAt(w * 100) * q <= EPS)
+			.pop() ?? 0
+	const prob = tailAt(investPct * 100) * q
 	const probNo = probAt(noUnwind.curve, investPct * 100)
 	const ok = prob <= EPS
 
@@ -73,7 +95,8 @@ export const QuantPanel = ({
 					<span className={styles.label}>Chance of a delayed payout</span>
 					<strong className={ok ? styles.good : styles.bad}>{pct(prob, 3)}</strong>
 					<span className={styles.note}>
-						limit {pct(EPS, 1)} · without early unwind: {pct(probNo, 2)}
+						limit {pct(EPS, 1)} · q = {pct(q, 0)} at today&apos;s utilization · without
+						early unwind: {pct(probNo, 2)}
 					</span>
 				</div>
 				<div>
@@ -104,7 +127,9 @@ export const QuantPanel = ({
 						Risk. Early unwind (any time in the last 30 days) cuts q from{" "}
 						{pct(noUnwind.q, 0)} to {pct(scenario.q, 0)}, which raises the safe
 						share from {Math.round(noUnwind.optimal_invest * 100)}% to{" "}
-						{Math.round(scenario.optimal_invest * 100)}%. The contract caps it at 80%.
+						{Math.round(scenario.optimal_invest * 100)}%. The contract caps it at 80%. But q
+						is live: when Blend gets crowded (above 85% borrowed) withdrawals get harder, so
+						q rises toward {pct(noUnwind.q, 0)} at 94% and the recommended share falls.
 					</p>
 					<p className={styles.note}>
 						Assumptions to calibrate with real data: {pct(curve.assumptions.p_no_deduction, 0)} of

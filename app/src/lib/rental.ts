@@ -36,7 +36,7 @@ export const symbolOf = (token: string) =>
 export const DECIMALS = 7
 /** RentalDeposit wasm already uploaded to testnet: new agreements are instances of it. */
 export const WASM_HASH =
-	"c0161a5e6678caf37b6dbd45e2261de34cb18711ed6bc1ecb767ad70dfc73db5"
+	"95f3ab7dd7243a0008cb72f308ff43e2935b708d66426fa8e2bf65e840c0fd5b"
 /** Neutral arbiter for disputes (the platform). Demo: the `alice` CLI identity. */
 export const PLATFORM_ARBITER =
 	"GAKGQO3VCSGAVWNYI2KLT2MU2MDEHD2EHU4QASOOFRZPP7HFVCMAALJJ"
@@ -121,6 +121,7 @@ export type StateName =
 	| "Disputed"
 	| "Settling"
 	| "Closed"
+	| "Declined"
 
 export interface Deposit {
 	tenant: string

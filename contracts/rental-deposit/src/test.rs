@@ -803,3 +803,36 @@ fn landlord_share_works_when_money_comes_back_in_two_steps() {
     assert_eq!(s.t.balance(&s.landlord), 120 * USDC + 3_500_000);
     assert_eq!(s.t.balance(&s.tenant), 880 * USDC + 66_500_000);
 }
+
+// ---------- the tenant can say no ----------
+
+#[test]
+fn tenant_can_decline_an_offer() {
+    let s = setup(7_000);
+    s.c.decline_offer();
+    assert_eq!(s.c.get_deposit().state, State::Declined);
+    assert_eq!(s.t.balance(&s.tenant), DEPOSIT); // nothing moved
+}
+
+#[test]
+#[should_panic(expected = "wrong state")]
+fn declined_offer_cannot_be_funded() {
+    let s = setup(7_000);
+    s.c.decline_offer();
+    fund(&s);
+}
+
+#[test]
+#[should_panic(expected = "wrong state")]
+fn cannot_decline_after_funding() {
+    let s = funded(7_000);
+    s.c.decline_offer();
+}
+
+#[test]
+fn only_the_tenant_can_decline() {
+    let s = setup(7_000);
+    s.env.set_auths(&[]); // no signatures at all
+    assert!(s.c.try_decline_offer().is_err());
+    assert_eq!(s.c.get_deposit().state, State::Offered);
+}

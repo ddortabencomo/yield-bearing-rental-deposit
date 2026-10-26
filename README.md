@@ -9,9 +9,9 @@
 | **Live app** | [blendlord.netlify.app](https://blendlord.netlify.app) |
 | **Live agreement, earning now** (100 USDC · 80% invested · 50% Blend / 50% DeFindex · 60-day lease) | [`CAYD…4ERN` on stellar.expert](https://stellar.expert/explorer/testnet/contract/CAYD7CI37ASKCBKVPJ4XMEE6MLSRN6JNCAJ3H6DWWQ6ZCDOOQEJ34ERN) |
 | **Completed agreement** (offer → fund → earn in Blend + DeFindex → deduction → release, landlord yield share 3%) | [`CBKF…YDAA` on stellar.expert](https://stellar.expert/explorer/testnet/contract/CBKF46ALDRFM6BXJWSKY375LFTEMPOU67XXNJQO6TJ4H6TPKI5WCYDAA) |
-| Contract code (Wasm hash) | `c0161a5e6678caf37b6dbd45e2261de34cb18711ed6bc1ecb767ad70dfc73db5` |
+| Contract code (Wasm hash) | `95f3ab7dd7243a0008cb72f308ff43e2935b708d66426fa8e2bf65e840c0fd5b` |
 | Blendlord DeFindex reserve vault | [`CDUL…QRDED`](https://stellar.expert/explorer/testnet/contract/CDULNJ6EKQJJRPPZIGZ3R4T2W3DVTDFQTAMX3RBVV3RII5JJAXZQRDED) |
-| Tests | **44 unit tests**, all passing (`cargo test -p rental-deposit`) |
+| Tests | **48 unit tests**, all passing (`cargo test -p rental-deposit`) |
 | Typical fee per action | **≈ 0.003 XLM** |
 | Demo video · Pitch deck | _links added at submission_ |
 
@@ -111,6 +111,7 @@ python quant/rebalance.py --days-to-lease-end 10 --execute   # glide-path demo
 | `__constructor(landlord, tenant, arbiter, token, pool, vault, amount, landlord_yield_bps, lease_end)` | Landlord | Creates the agreement with the landlord's terms (state `Offered`) |
 | `fund(landlord, arbiter, token, pool, vault, amount, invest_bps, defindex_bps, landlord_yield_bps, lease_end)` | Tenant | Accepts the landlord's terms, sets the tenant's own invest share and split, deposits and invests |
 | `cancel_offer()` | Landlord | Withdraws an unfunded offer |
+| `decline_offer()` | Tenant | Says no to an offer, explicitly; nothing moves and the landlord can re-offer |
 | `propose_deduction(amount, evidence)` | Landlord | Asks for a deduction (≤ deposit), with a link/hash to evidence |
 | `accept_and_release()` | Tenant | Accepts and settles with the waterfall |
 | `dispute()` | Tenant | Freezes the payout until the arbiter decides |
@@ -123,7 +124,7 @@ python quant/rebalance.py --days-to-lease-end 10 --execute   # glide-path demo
 | `extend_ttl()` | Anyone | Keeps the contract's storage alive during long leases |
 | `get_deposit()` | — (read) | Full state for the app |
 
-States: `Offered → Funded → DeductionProposed → (Disputed) → [Settling] → Closed`
+States: `Offered → Funded → DeductionProposed → (Disputed) → [Settling] → Closed` · an offer can also end as `Declined` (tenant) or `Closed` unfunded (landlord cancels)
 
 ---
 
@@ -149,6 +150,8 @@ $$c^* = \text{quantile}_{1-\varepsilon/q}(D), \qquad w^* = \min(1 - c^*,\ 80\%)$
 ![Delayed-payout probability vs. share invested](quant/curve.png)
 
 **Early unwind isn't a detail:** it raises the safe share from 51% to 80%, lifting expected yield from ~2.5% to ~4% of the deposit per year at a 5% supply APR, at the same risk. In the app, the tenant sees the recommendation, the live delay probability for the share they choose, and the expected yield at Blend's **current** supply APR.
+
+**q is live.** Blend refuses withdrawals that would push utilization past its cap, so the chance the venue can't pay rises when the pool is crowded. In the app, q is 2% while Blend is ≤ 85% borrowed and rises linearly to 25% at 94%, so the recommended share follows the pool: 80% at 80% utilization, 70% at 87%, 60% at 90%, 50% at ≥ 93.5% (same ε = 0.5%).
 
 **Where to invest (Blend direct vs. the DeFindex reserve).** The model also recommends the split, using the same utilization bands as the rebalancer (`app/src/lib/split.ts`): with Blend comfortably liquid (≤ 85% borrowed) it recommends 20% DeFindex, mostly direct for the full rate; between 85% and 94% it moves linearly toward the reserve; at ≥ 94%, or when the lease ends within 30 days, it recommends 100% DeFindex, the reserve our model de-risks. The tenant sees the recommendation and the reason, and can apply it with one click.
 
@@ -185,6 +188,7 @@ New rules added after the reviews have their own tests too: `tenant_chooses_how_
 - **Withdrawal is all-or-nothing per call.** If a venue can only return part of the position, `claim_remaining` waits until it can return the rest (the buffer has already paid out).
 - **Losses.** If Blend ever had bad debt, the landlord is still paid first, so the yield and then the tenant's principal absorb it. Blend's backstop is the first line of defence. With no yield, the landlord's yield share is zero.
 - **Rounding.** Blend rounds bTokens down and the vault rounds shares at entry, so with almost no elapsed time the tenant may receive a few stroops less than deposited.
+- **"My agreements" is per device.** The app remembers the agreements you created or opened in that browser; an on-chain index (factory) would list them on any device.
 - **Storage TTL.** A new contract lives for months; for longer leases a keeper calls `extend_ttl()`.
 
 ---
@@ -209,7 +213,7 @@ Open http://localhost:5173. Use two Freighter accounts (landlord and tenant), fu
 Contract tests and build:
 
 ```bash
-cargo test -p rental-deposit                   # 44 tests
+cargo test -p rental-deposit                   # 48 tests
 stellar contract build --package rental-deposit
 python quant/monte_carlo.py                    # regenerates quant/curve.json and curve.png
 ```
@@ -222,14 +226,14 @@ python quant/monte_carlo.py                    # regenerates quant/curve.json an
 | USDC (Blend testnet) | `CAQCFVLOBK5GIULPNZRGATJJMIZL5BSP7X5YJVMGCPTUEPFM4AVSRCJU` |
 | Blendlord DeFindex vault | `CDULNJ6EKQJJRPPZIGZ3R4T2W3DVTDFQTAMX3RBVV3RII5JJAXZQRDED` |
 | DeFindex Blend USDC strategy | `CALLOM5I7XLQPPOPQMYAHUWW4N7O3JKT42KQ4ASEEVBXDJQNJOALFSUY` |
-| RentalDeposit Wasm hash | `c0161a5e6678caf37b6dbd45e2261de34cb18711ed6bc1ecb767ad70dfc73db5` |
+| RentalDeposit Wasm hash | `95f3ab7dd7243a0008cb72f308ff43e2935b708d66426fa8e2bf65e840c0fd5b` |
 
 > Note: testnet resource fees spiked during the hackathon (the same call cost 0.001 XLM or hundreds of XLM depending on the hour). The app wraps calls in a **fee-bump transaction** when the fee doesn't fit a regular transaction, like the Stellar CLI does.
 
 ## Repository structure
 
 ```
-contracts/rental-deposit/   Soroban contract (lib.rs) and 44 tests (test.rs)
+contracts/rental-deposit/   Soroban contract (lib.rs) and 48 tests (test.rs)
 app/src/components/         RentalDeposit (agreement UI), QuantPanel (risk model UI)
 app/src/lib/rental.ts       Contract, Blend and DeFindex calls, live rates, fee-bump sending
 quant/                      Monte Carlo model (curve.json, curve.png) and rebalance.py (vault manager)

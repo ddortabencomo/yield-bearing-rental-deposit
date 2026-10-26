@@ -80,6 +80,7 @@ pub enum State {
     Disputed,          // tenant rejected it: frozen until the arbiter decides (or times out)
     Settling,          // liquid part paid out; the rest waits for Blend liquidity
     Closed,            // everything paid out (or the offer was cancelled)
+    Declined,          // the tenant said no to the offer: nothing ever moved
 }
 
 #[contracttype]
@@ -395,6 +396,16 @@ impl RentalDeposit {
         d.landlord.require_auth();
         assert!(d.state == State::Offered, "wrong state");
         d.state = State::Closed;
+        save(&env, &d);
+    }
+
+    /// Tenant says no to an offer, explicitly. Nothing has moved, so nothing moves now;
+    /// the landlord sees it and can make a new offer.
+    pub fn decline_offer(env: Env) {
+        let mut d = load(&env);
+        d.tenant.require_auth();
+        assert!(d.state == State::Offered, "wrong state");
+        d.state = State::Declined;
         save(&env, &d);
     }
 
