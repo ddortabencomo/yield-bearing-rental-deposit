@@ -70,7 +70,7 @@ flowchart LR
 ### DeFindex: a risk-managed shared reserve
 Putting money in DeFindex only to reach the same Blend pool would add nothing. What it adds is **management**:
 
-- **Our own vault**, "Blendlord", created with the DeFindex factory on testnet, with a Blend USDC strategy, a 1% fee on yield to the platform, and our rebalance-manager role.
+- **Our own vault**, "Blendlord", created with the DeFindex factory on testnet, with a Blend USDC strategy, a fee on yield to the platform (created at 1%), and our rebalance-manager role.
 - **One reserve shared by all agreements.** Each agreement holds vault shares (`deposit` / `withdraw`), and the vault decides how much of the pooled money sits idle versus invested.
 - **The risk model rebalances it.** `quant/rebalance.py` reads Blend's utilization and the upcoming move-outs and calls the vault's `rebalance`:
   - Utilization ≤ 85% → up to 90% of the reserve invested. Between 85% and 94% → scaled down linearly. ≥ 94% → everything back to idle.
@@ -184,6 +184,7 @@ New rules added after the reviews have their own tests too: `tenant_chooses_how_
 - **Early termination is allowed, but never by silence.** Before the lease ends, a settlement needs the tenant's acceptance or the neutral arbiter's ruling on a deduction the landlord raised (e.g. the tenant moves out early). Timeouts only apply after the lease ends.
 - **Pool, vault, token and arbiter are verified in the app, not on-chain.** The landlord sets them at creation. The app blocks funding unless they are the official Blend pool, the Blendlord vault, a supported asset and the platform's arbiter. In production: a factory contract with an allow-list.
 - **Single arbiter.** One neutral account (the platform) resolves disputes. In production: a multisig or an arbitration service.
+- **Vault fee paused on testnet.** See the business model: an external account without a trustline made fee distribution revert, which also blocked rebalancing. Found while testing, fixed by the vault manager in two calls.
 - **Rebalancer is off-chain.** `rebalance.py` holds the vault's rebalance-manager role; in production it runs as a keeper with monitoring.
 - **Withdrawal is all-or-nothing per call.** If a venue can only return part of the position, `claim_remaining` waits until it can return the rest (the buffer has already paid out).
 - **Losses.** If Blend ever had bad debt, the landlord is still paid first, so the yield and then the tenant's principal absorb it. Blend's backstop is the first line of defence. With no yield, the landlord's yield share is zero.
@@ -242,7 +243,7 @@ deploy/defindex/            Parameters used to create the Blendlord vault with t
 
 ## Business model
 
-- **Platform:** a 1% fee on the yield earned in the DeFindex reserve, collected on-chain by the vault (fee receiver = platform). Paid only when there is yield.
+- **Platform:** a 1% fee on the yield earned in the DeFindex reserve, collected on-chain by the vault (fee receiver = platform). Paid only when there is yield. *On testnet the fee is set to 0 for now: fee distribution also pays DeFindex's protocol fee account, which has no trustline for Blend's test USDC, so distributions reverted (`Error(Contract, #13)`). We set it with the vault's `lock_fees(0)` and returned the pending fees with `release_fees`; restoring it is `lock_fees(100)` once that account can receive the asset.*
 - **Landlords and agencies:** an agreed share of the yield (default 3%, capped at 5% on-chain), the incentive to offer Blendlord instead of a classic deposit.
 - **Tenants:** keep at least 95% of the yield and 100% of their deposit minus agreed deductions.
 

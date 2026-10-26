@@ -661,14 +661,21 @@ export const RentalDeposit = () => {
 									</span>
 								</label>
 							)}
-							<QuantPanel
-								amount={deposit.amount}
-								investPct={role === "Tenant" ? tenantInvestPct : deposit.invest_bps / 100}
-								onInvestPct={setTenantInvestPct}
-								leaseDays={Math.max(1, Math.round((deposit.lease_end - now) / 86_400))}
-								symbol={sym}
-								readOnly={role !== "Tenant"}
-							/>
+							{role === "Tenant" ? (
+								<QuantPanel
+									amount={deposit.amount}
+									investPct={tenantInvestPct}
+									onInvestPct={setTenantInvestPct}
+									leaseDays={Math.max(1, Math.round((deposit.lease_end - now) / 86_400))}
+									symbol={sym}
+								/>
+							) : (
+								<p className={styles.muted}>
+									The tenant chooses how much to invest (up to 80%) and where, with our risk
+									model&apos;s recommendation, when accepting. At least 20% always stays liquid
+									for the landlord&apos;s deduction.
+								</p>
+							)}
 							{role === "Tenant" && (
 								<label className={styles.field}>
 									Your choice: where your invested part earns yield:{" "}
@@ -816,7 +823,7 @@ export const RentalDeposit = () => {
 						<div className={`${styles.tile} ${styles.yieldTile}`}>
 							<span className={styles.label}>Yield accrued</span>
 							<strong>
-								+{fromUnits(accrued, 7)} {sym}
+								+{fromUnits(accrued, 5)} {sym}
 							</strong>
 							<span className={styles.muted}>
 								{deposit.state === "Closed"
@@ -925,9 +932,30 @@ export const RentalDeposit = () => {
 											onChange={(e) => setEvidence(e.target.value)}
 										/>
 									</label>
+									{(() => {
+										try {
+											return toUnits(deduction) > deposit.amount
+										} catch {
+											return false
+										}
+									})() && (
+										<p className={styles.muted}>
+											The deduction can&apos;t be larger than the deposit (
+											{fromUnits(deposit.amount)} {sym}).
+										</p>
+									)}
 									<button
 										className={styles.primary}
-										disabled={!!busy}
+										disabled={
+											!!busy ||
+											(() => {
+												try {
+													return toUnits(deduction) > deposit.amount
+												} catch {
+													return true
+												}
+											})()
+										}
 										onClick={() =>
 											void run("Deduction proposed", () =>
 												build(
