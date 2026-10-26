@@ -579,10 +579,6 @@ export const RentalDeposit = () => {
 						</span>
 					</label>
 					<p className={styles.muted}>
-						Your tenant chooses how much of the deposit earns yield (never above 80%), so at
-						least 20% always stays liquid to pay your deduction on the spot.
-					</p>
-					<p className={styles.muted}>
 						Disputes are decided by a neutral arbiter ({short(PLATFORM_ARBITER)}).
 					</p>
 					<button

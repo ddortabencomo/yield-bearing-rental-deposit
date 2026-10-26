@@ -7,7 +7,7 @@
 | | |
 |---|---|
 | **Live app** | [blendlord.netlify.app](https://blendlord.netlify.app) |
-| **Live agreement, earning now** (100 USDC · 80% invested · 50% Blend / 50% DeFindex · 60-day lease) | [`CAYD…4ERN` on stellar.expert](https://stellar.expert/explorer/testnet/contract/CAYD7CI37ASKCBKVPJ4XMEE6MLSRN6JNCAJ3H6DWWQ6ZCDOOQEJ34ERN) |
+| **Live agreement, earning now** (100 USDC · 80% invested · 50% Blend / 50% DeFindex · lease ends 2 Nov 2026) | [`CAYD…4ERN` on stellar.expert](https://stellar.expert/explorer/testnet/contract/CAYD7CI37ASKCBKVPJ4XMEE6MLSRN6JNCAJ3H6DWWQ6ZCDOOQEJ34ERN) |
 | **Completed agreement** (offer → fund → earn in Blend + DeFindex → deduction → release, landlord yield share 3%) | [`CBKF…YDAA` on stellar.expert](https://stellar.expert/explorer/testnet/contract/CBKF46ALDRFM6BXJWSKY375LFTEMPOU67XXNJQO6TJ4H6TPKI5WCYDAA) |
 | Contract code (Wasm hash) | `95f3ab7dd7243a0008cb72f308ff43e2935b708d66426fa8e2bf65e840c0fd5b` |
 | Blendlord DeFindex reserve vault | [`CDUL…QRDED`](https://stellar.expert/explorer/testnet/contract/CDULNJ6EKQJJRPPZIGZ3R4T2W3DVTDFQTAMX3RBVV3RII5JJAXZQRDED) |

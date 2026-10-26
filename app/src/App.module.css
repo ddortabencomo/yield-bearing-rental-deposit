@@ -91,3 +91,26 @@
 	font-stretch: 120%;
 	color: #0f0f0f;
 }
+
+/* Phones: one compact header row + a scrollable nav row, not sticky (it would cover the app) */
+@media (max-width: 720px) {
+	.header {
+		position: static;
+		padding: 12px 16px;
+		gap: 10px 12px;
+		justify-content: space-between;
+	}
+
+	.headerNav {
+		order: 3;
+		flex: 1 0 100%;
+		flex-wrap: nowrap;
+		gap: 18px;
+		overflow-x: auto;
+	}
+
+	.headerNav a {
+		white-space: nowrap;
+		font-size: 14px;
+	}
+}
