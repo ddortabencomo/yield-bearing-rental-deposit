@@ -691,8 +691,8 @@ export const RentalDeposit = () => {
 							</strong>
 							<span className={styles.muted}>
 								{deposit.state === "Closed"
-									? "paid to tenant"
-									: deposit.in_blend
+									? "paid out at settlement"
+									: deposit.in_blend || deposit.in_vault
 										? "live from Blend & DeFindex · updates every 8 s"
 										: "withdrawn, waiting for settlement"}
 							</span>
@@ -857,8 +857,7 @@ export const RentalDeposit = () => {
 								</div>
 							)}
 							<p className={styles.muted}>
-								Accepting pays out with the waterfall in one transaction. If Blend
-								can&apos;t return its part that day, the liquid buffer still pays
+								Accepting pays out with the waterfall in one transaction. If Blend or DeFindex can&apos;t return their part that day, the liquid buffer still pays
 								right away (landlord first) and the rest follows when liquidity is
 								back.
 							</p>
@@ -870,7 +869,7 @@ export const RentalDeposit = () => {
 							<h2>Disputed: payout frozen</h2>
 							<p>
 								Funds stay locked in the contract
-								{deposit.in_blend ? " (and keep earning in Blend)" : ""} until the
+								{deposit.in_blend || deposit.in_vault ? " (and keep earning)" : ""} until the
 								neutral arbiter ({short(deposit.arbiter)}) resolves the dispute. The
 								arbiter can never award more than the landlord asked.
 							</p>
@@ -879,9 +878,9 @@ export const RentalDeposit = () => {
 
 					{deposit.state === "Settling" && (
 						<div className={`card ${styles.warn}`}>
-							<h2>Partly paid out: waiting for Blend liquidity</h2>
+							<h2>Partly paid out: waiting for liquidity</h2>
 							<p>
-								The liquid buffer has been paid with the waterfall. Blend can&apos;t
+								The liquid buffer has been paid with the waterfall. Blend or DeFindex can&apos;t
 								return the invested part right now (the pool is heavily borrowed),
 								so it stays there, still earning, until anyone claims it.
 							</p>
@@ -908,7 +907,7 @@ export const RentalDeposit = () => {
 									void run("Remaining claimed", () => build(contractId, "claim_remaining"))
 								}
 							>
-								Claim the rest from Blend
+								Claim the rest
 							</button>
 						</div>
 					)}
