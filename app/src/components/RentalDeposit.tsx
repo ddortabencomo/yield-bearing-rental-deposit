@@ -79,10 +79,12 @@ export const RentalDeposit = () => {
 	const [deduction, setDeduction] = useState("12")
 	const [evidence, setEvidence] = useState("ipfs://inspection-photos")
 
-	const scrolledOnLoad = useRef(false)
+	// Bring the app into view once the agreement has loaded: after a page load with #app
+	// (e.g. a shared agreement link) and after opening an agreement from this page.
+	const scrollToApp = useRef(window.location.hash === "#app")
 	useEffect(() => {
-		if (!loading && !scrolledOnLoad.current && window.location.hash === "#app") {
-			scrolledOnLoad.current = true
+		if (!loading && scrollToApp.current) {
+			scrollToApp.current = false
 			setTimeout(() => document.getElementById("app")?.scrollIntoView(), 50)
 		}
 	}, [loading])
@@ -380,7 +382,10 @@ export const RentalDeposit = () => {
 						disabled={!/C[A-Z2-7]{55}/.test(agreementInput)}
 						onClick={() => {
 							const m = agreementInput.match(/C[A-Z2-7]{55}/)
-							if (m) setParams({ id: m[0] })
+							if (m) {
+								scrollToApp.current = true
+								setParams({ id: m[0] })
+							}
 						}}
 					>
 						Open agreement
@@ -391,6 +396,7 @@ export const RentalDeposit = () => {
 							href={`/?id=${DEFAULT_CONTRACT}#app`}
 							onClick={(e) => {
 								e.preventDefault()
+								scrollToApp.current = true
 								setParams({ id: DEFAULT_CONTRACT })
 							}}
 						>
